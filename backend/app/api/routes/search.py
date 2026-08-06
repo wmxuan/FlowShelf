@@ -1,6 +1,7 @@
 """
 搜索 API 路由
 """
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -23,24 +24,25 @@ async def semantic_search(
 ):
     """
     语义搜索
-    
+
     用自然语言描述你要找的内容，AI 会进行语义匹配
     """
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = SearchService(db, ai_provider)
-    
+
     results, total = await service.semantic_search(
         query=q,
         search_type=type,
         limit=limit,
     )
-    
-    return SearchResponse(
-        results=results,
-        total=total,
-        query=q
-    )
+
+    return SearchResponse(results=results, total=total, query=q)
