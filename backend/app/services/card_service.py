@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from app.db.models.models import Card
 from app.db.schemas.schemas import CardCreate, CardUpdate
 from app.providers.base import BaseAIProvider
+from app.services.tag_service import get_candidate_tags, normalize_tags
 from app.tools.content_extractor import content_extractor, ExtractionResult
 
 
@@ -49,8 +50,14 @@ class CardService:
             content_text = content
             source_type = "article"
 
-        # Step 2: AI 生成卡片内容（标题 / 摘要 / 关键观点 / 标签 / 向量）
-        card_data = await self.ai_provider.generate_card(url, content_text)
+        # Step 2: 查候选标签库 + AI 生成卡片内容（注入候选引导 AI 优先复用现有标签）
+        candidates = await get_candidate_tags(self.db, "cards", top_n=30)
+        card_data = await self.ai_provider.generate_card(
+            url, content_text, candidate_tags=candidates
+        )
+
+        # Step 2.5: 标签归一化（相似度去重，归并到已有标签，抑制同义标签膨胀）
+        normalized_tags = normalize_tags(card_data["tags"], candidates)
 
         # Step 3: 标题优先级：AI 生成 > 抽取 > URL 兜底
         title = card_data.get("title") or extracted_title or self._fallback_title(url)
@@ -61,7 +68,7 @@ class CardService:
             title=title,
             ai_summary=card_data["summary"],
             key_points=card_data["key_points"],
-            ai_tags=card_data["tags"],
+            ai_tags=normalized_tags,
             source_type=source_type,
             embedding=card_data["embedding"],
             read_at=datetime.now(),
@@ -83,11 +90,14 @@ class CardService:
         extraction = await content_extractor.extract(url)
         if not extraction.success:
             raise ValueError(extraction.error or "正文抽取失败")
-        result = await self.ai_provider.generate_card(url, extraction.content)
+        candidates = await get_candidate_tags(self.db, "cards", top_n=30)
+        result = await self.ai_provider.generate_card(
+            url, extraction.content, candidate_tags=candidates
+        )
         return {
             "summary": result["summary"],
             "key_points": result["key_points"],
-            "tags": result["tags"],
+            "tags": normalize_tags(result["tags"], candidates),
         }
 
     @staticmethod

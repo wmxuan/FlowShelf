@@ -84,7 +84,9 @@ export const toolsApi = {
     if (params?.sort_by) queryString.set('sort_by', params.sort_by);
     return apiRequest<Tool[]>(`/tools?${queryString.toString()}`);
   },
-  
+
+  tags: () => apiRequest<TagCount[]>('/tools/tags'),
+
   get: (id: number) => apiRequest<Tool>(`/tools/${id}`),
   
   update: (id: number, data: object) =>

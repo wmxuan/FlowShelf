@@ -3,16 +3,18 @@
 import { useEffect, useState } from 'react';
 import { Wrench, Tag, Clock, Eye, Trash2, ExternalLink } from 'lucide-react';
 import { toolsApi } from '@/services/api';
-import type { Tool } from '@/types';
+import type { Tool, TagCount } from '@/types';
 
 export default function ToolboxPage() {
   const [tools, setTools] = useState<Tool[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [allTags, setAllTags] = useState<TagCount[]>([]);
   const [sortBy, setSortBy] = useState('created_at');
   const [newToolUrl, setNewToolUrl] = useState('');
   const [newToolTitle, setNewToolTitle] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showAllTags, setShowAllTags] = useState(false);
 
   const fetchTools = async () => {
     setIsLoading(true);
@@ -30,9 +32,22 @@ export default function ToolboxPage() {
     }
   };
 
+  const fetchTags = async () => {
+    try {
+      const data = await toolsApi.tags();
+      setAllTags(data);
+    } catch (err) {
+      console.error('获取标签失败:', err);
+    }
+  };
+
   useEffect(() => {
     fetchTools();
   }, [activeTag, sortBy]);
+
+  useEffect(() => {
+    fetchTags();
+  }, []);
 
   const handleAddTool = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,6 +59,7 @@ export default function ToolboxPage() {
       setNewToolTitle('');
       setShowAddForm(false);
       fetchTools();
+      fetchTags();
     } catch (err) {
       console.error('添加工具失败:', err);
       alert('添加失败');
@@ -55,6 +71,7 @@ export default function ToolboxPage() {
     try {
       await toolsApi.delete(id);
       fetchTools();
+      fetchTags();
     } catch (err) {
       console.error('删除失败:', err);
     }
@@ -68,11 +85,6 @@ export default function ToolboxPage() {
       console.error('记录访问失败:', err);
     }
   };
-
-  // 提取所有标签
-  const allTags = Array.from(
-    new Set(tools.flatMap((t) => t.ai_tags || []))
-  ).sort();
 
   return (
     <div className="space-y-8">
@@ -142,15 +154,24 @@ export default function ToolboxPage() {
             >
               全部
             </button>
-            {allTags.map((tag) => (
+            {(showAllTags ? allTags : allTags.slice(0, 15)).map((t) => (
               <button
-                key={tag}
-                onClick={() => setActiveTag(tag === activeTag ? null : tag)}
-                className={`badge ${tag === activeTag ? 'badge-primary' : 'badge-secondary'}`}
+                key={t.name}
+                onClick={() => setActiveTag(t.name === activeTag ? null : t.name)}
+                className={`badge ${t.name === activeTag ? 'badge-primary' : 'badge-secondary'}`}
               >
-                {tag}
+                {t.name}
+                <span className="ml-1 opacity-60">{t.count}</span>
               </button>
             ))}
+            {allTags.length > 15 && (
+              <button
+                onClick={() => setShowAllTags(!showAllTags)}
+                className="badge badge-secondary"
+              >
+                {showAllTags ? '收起' : `+${allTags.length - 15} 更多`}
+              </button>
+            )}
           </div>
         )}
 
