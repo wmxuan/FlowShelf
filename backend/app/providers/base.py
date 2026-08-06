@@ -2,25 +2,56 @@
 AI Provider 抽象层
 
 支持真实模式（调用 LLM API）和 DEMO 模式（返回模拟数据）
+
+兼容性说明：
+- 使用 JSON mode（response_format=json_object）而非 OpenAI 结构化输出（json_schema），
+  保证 DeepSeek / 通义千问 / Moonshot 等 OpenAI 兼容服务都能用
+- Embedding 调用失败时优雅降级为 hash 向量，不阻断建卡流程
+  （DeepSeek 无 Embedding API，等 Phase 1 任务 6 接入独立 Embedding 服务）
 """
+import hashlib
+import json
+import logging
+import os
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
+from functools import lru_cache
+from typing import List, Optional
+
+from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
+
+from app.db.schemas.ai_schemas import CardAIOutput, ToolClassificationOutput
+
+logger = logging.getLogger(__name__)
+
+_PROMPT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
+
+
+@lru_cache()
+def _load_prompt(name: str) -> str:
+    """从 app/prompts/ 加载 Prompt 文本，缓存结果"""
+    path = os.path.join(_PROMPT_DIR, f"{name}.txt")
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _hash_embedding(text: str, dim: int = 1536) -> List[float]:
+    """无 Embedding API 时的兜底：基于文本 hash 生成伪向量（不可用于真实语义检索）"""
+    hash_bytes = hashlib.md5(text.encode()).digest()
+    base = [b / 255.0 for b in hash_bytes]
+    return (base * (dim // 16 + 1))[:dim]
 
 
 class BaseAIProvider(ABC):
     """AI Provider 基类"""
-    
+
     @abstractmethod
     async def generate_card(self, url: str, content: str) -> dict:
         """
         生成知识卡片
-        
-        Args:
-            url: 原文 URL
-            content: 正文内容
-            
+
         Returns:
             {
+                "title": str,
                 "summary": str,
                 "key_points": List[str],
                 "tags": List[str],
@@ -28,70 +59,146 @@ class BaseAIProvider(ABC):
             }
         """
         pass
-    
+
     @abstractmethod
     async def generate_embedding(self, text: str) -> List[float]:
-        """
-        生成向量
-        
-        Args:
-            text: 要向量化的文本
-            
-        Returns:
-            向量列表
-        """
+        """生成向量"""
         pass
-    
+
     @abstractmethod
     async def classify_tool(self, url: str, title: str, content: str) -> dict:
         """
         分类工具（用于智能分流）
-        
-        Args:
-            url: 工具 URL
-            title: 工具标题
-            content: 页面内容
-            
+
         Returns:
-            {
-                "type": str,  # tool | article | video
-                "tags": List[str]
-            }
+            {"type": str, "tags": List[str]}
         """
         pass
 
 
 class RealAIProvider(BaseAIProvider):
-    """真实 AI Provider（调用 LLM API）"""
-    
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini", embedding_model: str = "text-embedding-3-small"):
-        self.api_key = api_key
+    """真实 AI Provider（调用 OpenAI 兼容 API）"""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o-mini",
+        embedding_model: str = "text-embedding-3-small",
+        base_url: str = "",
+        max_tokens: int = 500,
+        temperature: float = 0.3,
+    ):
+        client_kwargs = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self.client = AsyncOpenAI(**client_kwargs)
         self.model = model
         self.embedding_model = embedding_model
-    
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+
     async def generate_card(self, url: str, content: str) -> dict:
-        """调用真实 LLM 生成卡片"""
-        # TODO: 实现真实 API 调用
-        # 这里是接口定义，Phase 1 先用 DEMO_MODE
-        raise NotImplementedError("真实 AI Provider 待实现")
-    
+        """调用 LLM 生成卡片（JSON mode + Pydantic 校验 + Embedding 降级）"""
+        # 1. 加载并填充 Prompt
+        prompt_template = _load_prompt("card_generation")
+        user_prompt = prompt_template.format(url=url, content=content or "(正文为空)")
+
+        # 2. 调用 LLM（JSON mode，兼容 DeepSeek 等非 OpenAI 服务）
+        try:
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "你是 FlowShelf 的知识策展助手，必须严格按 JSON 格式输出。"},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+        except APITimeoutError:
+            raise RuntimeError("AI 调用超时")
+        except RateLimitError:
+            raise RuntimeError("AI 调用触发限流，请稍后重试")
+        except APIError as exc:
+            raise RuntimeError(f"AI 调用失败：{exc.__class__.__name__}: {exc}")
+
+        raw = completion.choices[0].message.content or ""
+
+        # 3. 解析 JSON + Pydantic 校验
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"AI 返回非合法 JSON：{raw[:200]}")
+
+        try:
+            parsed = CardAIOutput.model_validate(data)
+        except Exception as exc:
+            raise RuntimeError(f"AI 输出校验失败：{exc}")
+
+        # 4. 生成 embedding（失败时降级为 hash 向量，不阻断建卡）
+        embed_text = "\n".join([parsed.title, parsed.summary, *parsed.key_points])
+        embedding = await self._safe_embedding(embed_text)
+
+        return {
+            "title": parsed.title,
+            "summary": parsed.summary,
+            "key_points": parsed.key_points,
+            "tags": parsed.tags,
+            "embedding": embedding,
+        }
+
     async def generate_embedding(self, text: str) -> List[float]:
-        """调用真实 Embedding API"""
-        # TODO: 实现真实 API 调用
-        raise NotImplementedError("真实 AI Provider 待实现")
-    
+        """调用 Embedding API（若服务商不支持则抛 RuntimeError）"""
+        try:
+            resp = await self.client.embeddings.create(
+                model=self.embedding_model,
+                input=text,
+            )
+            return resp.data[0].embedding
+        except (APITimeoutError, RateLimitError, APIError) as exc:
+            raise RuntimeError(f"Embedding 生成失败：{exc.__class__.__name__}")
+
+    async def _safe_embedding(self, text: str) -> List[float]:
+        """尝试真实 Embedding，失败则降级为 hash 向量"""
+        try:
+            return await self.generate_embedding(text)
+        except Exception as exc:
+            logger.warning("Embedding 降级为 hash 向量：%s", exc)
+            return _hash_embedding(text)
+
     async def classify_tool(self, url: str, title: str, content: str) -> dict:
-        """调用真实 LLM 分类工具"""
-        # TODO: 实现真实 API 调用
-        raise NotImplementedError("真实 AI Provider 待实现")
+        """调用 LLM 分类工具（JSON mode）"""
+        try:
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "你是 FlowShelf 的收藏分流助手，判断网页类型并给出标签。输出 JSON：{\"type\": \"tool|article|video\", \"tags\": [\"标签\"]}"},
+                    {"role": "user", "content": f"URL: {url}\n标题: {title}\n正文片段: {(content or '')[:1000]}"},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=200,
+                temperature=self.temperature,
+            )
+        except (APITimeoutError, RateLimitError, APIError) as exc:
+            logger.warning("AI 分类失败，降级为 article：%s", exc)
+            return {"type": "article", "tags": []}
+
+        try:
+            data = json.loads(completion.choices[0].message.content or "{}")
+            parsed = ToolClassificationOutput.model_validate(data)
+            return {"type": parsed.type, "tags": parsed.tags}
+        except Exception:
+            logger.warning("AI 分类输出解析失败，降级为 article")
+            return {"type": "article", "tags": []}
 
 
 class DemoAIProvider(BaseAIProvider):
     """DEMO 模式 AI Provider（返回模拟数据）"""
-    
+
     async def generate_card(self, url: str, content: str) -> dict:
         """返回模拟卡片数据"""
         return {
+            "title": f"来自 {url[:30]} 的卡片",
             "summary": f"这是对文章《{content[:50]}...》的摘要。文章主要讨论了相关技术的核心原理和最佳实践，为读者提供了全面的参考。",
             "key_points": [
                 "核心观点 1：技术选型需要综合考虑成本和性能",
@@ -99,46 +206,41 @@ class DemoAIProvider(BaseAIProvider):
                 "核心观点 3：持续的迭代和优化比一次性完美更重要"
             ],
             "tags": ["技术", "架构", "最佳实践"],
-            "embedding": [0.1] * 1536  # 模拟向量
+            "embedding": [0.1] * 1536,
         }
-    
+
     async def generate_embedding(self, text: str) -> List[float]:
         """返回模拟向量"""
-        # 基于文本长度生成不同的模拟向量（简单 hash）
-        import hashlib
-        hash_bytes = hashlib.md5(text.encode()).digest()
-        base_vector = [b / 255.0 for b in hash_bytes]
-        # 扩展到 1536 维
-        vector = (base_vector * 61)[:1536]  # 16 * 61 = 976, need 1536
-        while len(vector) < 1536:
-            vector.extend(base_vector)
-        return vector[:1536]
-    
+        return _hash_embedding(text)
+
     async def classify_tool(self, url: str, title: str, content: str) -> dict:
         """返回模拟分类结果"""
         url_lower = url.lower()
-        
-        # 简单规则判断
         if any(keyword in url_lower for keyword in ["tool", "app", "dashboard", "console"]):
-            return {
-                "type": "tool",
-                "tags": ["工具", "常用"]
-            }
+            return {"type": "tool", "tags": ["工具", "常用"]}
         elif any(keyword in url_lower for keyword in ["video", "youtube", "bilibili"]):
-            return {
-                "type": "video",
-                "tags": ["视频"]
-            }
+            return {"type": "video", "tags": ["视频"]}
         else:
-            return {
-                "type": "article",
-                "tags": ["文章", "待学习"]
-            }
+            return {"type": "article", "tags": ["文章", "待学习"]}
 
 
-def get_ai_provider(demo_mode: bool = True, api_key: str = "") -> BaseAIProvider:
+def get_ai_provider(
+    demo_mode: bool = True,
+    api_key: str = "",
+    base_url: str = "",
+    model: str = "gpt-4o-mini",
+    embedding_model: str = "text-embedding-3-small",
+    max_tokens: int = 500,
+    temperature: float = 0.3,
+) -> BaseAIProvider:
     """获取 AI Provider 实例"""
     if demo_mode:
         return DemoAIProvider()
-    else:
-        return RealAIProvider(api_key=api_key)
+    return RealAIProvider(
+        api_key=api_key,
+        model=model,
+        embedding_model=embedding_model,
+        base_url=base_url,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )

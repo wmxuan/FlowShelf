@@ -31,7 +31,7 @@ export default function URLInput({ onCardCreated }: URLInputProps) {
 
     try {
       const result = await cardsApi.generate(url);
-      setPreview(result);
+      setPreview(result as { summary: string; key_points: string[]; tags: string[] });
       setShowPreview(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成失败');

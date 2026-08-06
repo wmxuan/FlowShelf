@@ -4,13 +4,16 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { FileText, Tag, Calendar, Sparkles, ExternalLink, Trash2 } from 'lucide-react';
 import { cardsApi } from '@/services/api';
-import type { Card } from '@/types';
+import type { Card, TagCount } from '@/types';
 import URLInput from '@/components/URLInput';
+import CardDetailModal from '@/components/CardDetailModal';
 
 export default function CardsPage() {
   const [cards, setCards] = useState<Card[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [allTags, setAllTags] = useState<TagCount[]>([]);
+  const [selectedCard, setSelectedCard] = useState<Card | null>(null);
 
   const fetchCards = async (tag?: string) => {
     setIsLoading(true);
@@ -24,24 +27,39 @@ export default function CardsPage() {
     }
   };
 
+  const fetchTags = async () => {
+    try {
+      const data = await cardsApi.tags();
+      setAllTags(data);
+    } catch (err) {
+      console.error('获取标签失败:', err);
+    }
+  };
+
   useEffect(() => {
     fetchCards(activeTag || undefined);
   }, [activeTag]);
+
+  useEffect(() => {
+    fetchTags();
+  }, []);
 
   const handleDelete = async (id: number) => {
     if (!confirm('确定删除这张卡片吗？')) return;
     try {
       await cardsApi.delete(id);
       fetchCards(activeTag || undefined);
+      fetchTags();
     } catch (err) {
       console.error('删除失败:', err);
     }
   };
 
-  // 提取所有标签
-  const allTags = Array.from(
-    new Set(cards.flatMap((c) => c.ai_tags || []))
-  ).sort();
+  const handleUpdated = (updated: Card) => {
+    setCards((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    setSelectedCard(updated);
+    fetchTags();
+  };
 
   return (
     <div className="space-y-8">
@@ -59,7 +77,12 @@ export default function CardsPage() {
       </div>
 
       {/* URL 输入 */}
-      <URLInput onCardCreated={() => fetchCards(activeTag || undefined)} />
+      <URLInput
+        onCardCreated={() => {
+          fetchCards(activeTag || undefined);
+          fetchTags();
+        }}
+      />
 
       {/* 标签筛选 */}
       {allTags.length > 0 && (
@@ -74,13 +97,14 @@ export default function CardsPage() {
           >
             全部
           </button>
-          {allTags.map((tag) => (
+          {allTags.map((t) => (
             <button
-              key={tag}
-              onClick={() => setActiveTag(tag === activeTag ? null : tag)}
-              className={`badge ${tag === activeTag ? 'badge-primary' : 'badge-secondary'}`}
+              key={t.name}
+              onClick={() => setActiveTag(t.name === activeTag ? null : t.name)}
+              className={`badge ${t.name === activeTag ? 'badge-primary' : 'badge-secondary'}`}
             >
-              {tag}
+              {t.name}
+              <span className="ml-1 opacity-60">{t.count}</span>
             </button>
           ))}
         </div>
@@ -113,7 +137,11 @@ export default function CardsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {cards.map((card) => (
-            <div key={card.id} className="card group">
+            <div
+              key={card.id}
+              className="card group cursor-pointer"
+              onClick={() => setSelectedCard(card)}
+            >
               <div className="mb-3 flex items-start justify-between gap-2">
                 <h3 className="card-title line-clamp-2 flex-1">
                   {card.title}
@@ -122,13 +150,17 @@ export default function CardsPage() {
                   <Link
                     href={card.source_url}
                     target="_blank"
+                    onClick={(e) => e.stopPropagation()}
                     className="rounded p-1 hover:bg-muted transition-colors"
                     title="查看原文"
                   >
                     <ExternalLink className="h-4 w-4 text-muted-foreground" />
                   </Link>
                   <button
-                    onClick={() => handleDelete(card.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(card.id);
+                    }}
                     className="rounded p-1 hover:bg-destructive/10 hover:text-destructive transition-colors"
                     title="删除"
                   >
@@ -179,6 +211,13 @@ export default function CardsPage() {
           ))}
         </div>
       )}
+
+      {/* 详情/编辑弹窗 */}
+      <CardDetailModal
+        card={selectedCard}
+        onClose={() => setSelectedCard(null)}
+        onUpdated={handleUpdated}
+      />
     </div>
   );
 }
