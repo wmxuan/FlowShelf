@@ -71,6 +71,18 @@ class BaseAIProvider(ABC):
         """生成向量"""
         pass
 
+    async def safe_generate_embedding(self, text: str) -> List[float]:
+        """安全的向量生成：失败时降级为 hash 向量，不抛异常。
+
+        供 search_service 等需要容错的场景调用，避免 Embedding 服务不可用
+        （如 deepseek 无 Embedding API）导致接口 500。
+        """
+        try:
+            return await self.generate_embedding(text)
+        except Exception as exc:
+            logger.warning("Embedding 降级为 hash 向量：%s", exc)
+            return _hash_embedding(text)
+
     @abstractmethod
     async def classify_tool(
         self,
@@ -161,7 +173,7 @@ class RealAIProvider(BaseAIProvider):
 
         # 4. 生成 embedding（失败时降级为 hash 向量，不阻断建卡）
         embed_text = "\n".join([parsed.title, parsed.summary, *parsed.key_points])
-        embedding = await self._safe_embedding(embed_text)
+        embedding = await self.safe_generate_embedding(embed_text)
 
         return {
             "title": parsed.title,
@@ -181,14 +193,6 @@ class RealAIProvider(BaseAIProvider):
             return resp.data[0].embedding
         except (APITimeoutError, RateLimitError, APIError) as exc:
             raise RuntimeError(f"Embedding 生成失败：{exc.__class__.__name__}")
-
-    async def _safe_embedding(self, text: str) -> List[float]:
-        """尝试真实 Embedding，失败则降级为 hash 向量"""
-        try:
-            return await self.generate_embedding(text)
-        except Exception as exc:
-            logger.warning("Embedding 降级为 hash 向量：%s", exc)
-            return _hash_embedding(text)
 
     async def classify_tool(
         self,

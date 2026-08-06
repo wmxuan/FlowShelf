@@ -89,6 +89,27 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Bookmarklet 安装 */}
+      <section className="card">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <h2 className="text-2xl font-bold">一键收藏，随时随地</h2>
+          <p className="text-muted-foreground max-w-xl">
+            把下方的按钮拖到浏览器书签栏，在任意网页点击即可收藏到 FlowShelf，AI 自动生成知识卡片。
+          </p>
+          <a
+            href="javascript:void(window.open('http://localhost:3000/bookmarklet?url='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title)))"
+            className="button button-primary text-base px-6 py-3 cursor-move"
+            title="拖拽到浏览器书签栏"
+            onClick={(e) => e.preventDefault()}
+          >
+            📌 收藏到 FlowShelf
+          </a>
+          <p className="text-xs text-muted-foreground">
+            提示：按住此链接，拖到浏览器书签栏即可安装
+          </p>
+        </div>
+      </section>
+
       {/* CTA Section */}
       <section className="text-center">
         <h2 className="text-2xl font-bold mb-4">开始你的知识沉淀之旅</h2>
