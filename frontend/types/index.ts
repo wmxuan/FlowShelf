@@ -19,6 +19,11 @@ export interface CardGenerationResponse {
   tags: string[];
 }
 
+export interface TagCount {
+  name: string;
+  count: number;
+}
+
 export interface Tool {
   id: number;
   url: string;

@@ -1,4 +1,4 @@
-import type { Card, Tool, SearchResponse } from '@/types';
+import type { Card, Tool, SearchResponse, TagCount } from '@/types';
 
 // API 基础配置
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -45,11 +45,13 @@ export const cardsApi = {
     if (params?.days) queryString.set('days', String(params.days));
     return apiRequest<Card[]>(`/cards?${queryString.toString()}`);
   },
-  
+
+  tags: () => apiRequest<TagCount[]>('/cards/tags'),
+
   get: (id: number) => apiRequest<Card>(`/cards/${id}`),
   
   update: (id: number, data: object) =>
-    apiRequest(`/cards/${id}`, {
+    apiRequest<Card>(`/cards/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),

@@ -1,6 +1,7 @@
 """
 卡片 API 路由
 """
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
@@ -10,8 +11,13 @@ from app.core.config import get_settings
 from app.providers.base import get_ai_provider
 from app.services.card_service import CardService
 from app.db.schemas.schemas import (
-    CardCreate, CardUpdate, CardResponse, 
-    CardGenerationRequest, CardGenerationResponse, MessageResponse
+    CardCreate,
+    CardUpdate,
+    CardResponse,
+    CardGenerationRequest,
+    CardGenerationResponse,
+    MessageResponse,
+    TagCount,
 )
 
 router = APIRouter(prefix="/api/cards", tags=["cards"])
@@ -22,21 +28,30 @@ async def create_card(
     request: CardCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    """创建卡片（AI 生成）"""
+    """创建卡片（正文抽取 + AI 生成）"""
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = CardService(db, ai_provider)
-    
-    # TODO: Phase 1 实现 URL → 正文抽取
-    # 目前先用 DEMO 模式生成卡片
-    card = await service.create_card(
-        url=request.source_url,
-        content=""  # Phase 1.1 实现正文抽取
-    )
-    
+
+    try:
+        card = await service.create_card(url=request.source_url)
+    except ValueError as exc:
+        # 正文抽取失败 → 422，给用户清晰反馈
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        # AI 调用或数据库失败 → 502，不暴露内部细节
+        raise HTTPException(
+            status_code=502, detail=f"卡片生成失败：{exc.__class__.__name__}"
+        )
+
     return card
 
 
@@ -52,18 +67,42 @@ async def list_cards(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = CardService(db, ai_provider)
-    
+
     cards = await service.get_cards(
         skip=skip,
         limit=limit,
         tag=tag,
         days=days,
     )
-    
+
     return cards
+
+
+@router.get("/tags", response_model=List[TagCount])
+async def list_tags(
+    db: AsyncSession = Depends(get_db),
+):
+    """获取所有标签及其卡片计数（独立于卡片列表筛选）"""
+    settings = get_settings()
+    ai_provider = get_ai_provider(
+        demo_mode=settings.DEMO_MODE,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
+    )
+    service = CardService(db, ai_provider)
+    return await service.get_tags_with_count()
 
 
 @router.get("/{card_id}", response_model=CardResponse)
@@ -75,14 +114,19 @@ async def get_card(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = CardService(db, ai_provider)
-    
+
     card = await service.get_card(card_id)
     if not card:
         raise HTTPException(status_code=404, detail="卡片不存在")
-    
+
     return card
 
 
@@ -96,14 +140,19 @@ async def update_card(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = CardService(db, ai_provider)
-    
+
     card = await service.update_card(card_id, update_data)
     if not card:
         raise HTTPException(status_code=404, detail="卡片不存在")
-    
+
     return card
 
 
@@ -116,14 +165,19 @@ async def delete_card(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = CardService(db, ai_provider)
-    
+
     success = await service.delete_card(card_id)
     if not success:
         raise HTTPException(status_code=404, detail="卡片不存在")
-    
+
     return MessageResponse(message="卡片已删除")
 
 
@@ -134,24 +188,30 @@ async def generate_card(
 ):
     """
     生成卡片（仅返回 AI 结果，不保存）
-    
+
     用于预览卡片内容
     """
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
-    
-    # TODO: Phase 1.1 实现 URL → 正文抽取
-    # 目前先用 DEMO 模式
-    result = await ai_provider.generate_card(
-        url=request.url,
-        content=""
-    )
-    
+    service = CardService(db, ai_provider)
+
+    try:
+        result = await service.generate_card_preview(request.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"卡片生成失败：{exc.__class__.__name__}"
+        )
+
     return CardGenerationResponse(
-        summary=result["summary"],
-        key_points=result["key_points"],
-        tags=result["tags"]
+        summary=result["summary"], key_points=result["key_points"], tags=result["tags"]
     )
