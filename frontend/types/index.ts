@@ -1,0 +1,58 @@
+// TypeScript 类型定义
+
+export interface Card {
+  id: number;
+  source_url: string;
+  title: string;
+  ai_summary: string;
+  key_points: string[];
+  ai_tags: string[];
+  source_type: string;
+  read_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CardGenerationResponse {
+  summary: string;
+  key_points: string[];
+  tags: string[];
+}
+
+export interface Tool {
+  id: number;
+  url: string;
+  title: string;
+  ai_tags: string[];
+  description: string | null;
+  visit_count: number;
+  last_visited_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SearchResult {
+  id: number;
+  title: string;
+  url: string;
+  type: 'card' | 'tool';
+  summary: string | null;
+  tags: string[];
+  score: number;
+}
+
+export interface SearchResponse {
+  results: SearchResult[];
+  total: number;
+  query: string;
+}
+
+export interface MessageResponse {
+  message: string;
+  data?: Record<string, unknown>;
+}
+
+export interface ErrorResponse {
+  detail: string;
+  error_code?: string;
+}
