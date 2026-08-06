@@ -9,6 +9,7 @@ AI Provider 抽象层
 - Embedding 调用失败时优雅降级为 hash 向量，不阻断建卡流程
   （DeepSeek 无 Embedding API，等 Phase 1 任务 6 接入独立 Embedding 服务）
 """
+
 import hashlib
 import json
 import logging
@@ -45,9 +46,14 @@ class BaseAIProvider(ABC):
     """AI Provider 基类"""
 
     @abstractmethod
-    async def generate_card(self, url: str, content: str) -> dict:
+    async def generate_card(
+        self, url: str, content: str, candidate_tags: Optional[List[str]] = None
+    ) -> dict:
         """
         生成知识卡片
+
+        Args:
+            candidate_tags: 现有高频标签，注入 Prompt 引导 AI 优先复用，抑制标签膨胀
 
         Returns:
             {
@@ -66,9 +72,18 @@ class BaseAIProvider(ABC):
         pass
 
     @abstractmethod
-    async def classify_tool(self, url: str, title: str, content: str) -> dict:
+    async def classify_tool(
+        self,
+        url: str,
+        title: str,
+        content: str,
+        candidate_tags: Optional[List[str]] = None,
+    ) -> dict:
         """
         分类工具（用于智能分流）
+
+        Args:
+            candidate_tags: 现有高频标签，注入 Prompt 引导 AI 优先复用，抑制标签膨胀
 
         Returns:
             {"type": str, "tags": List[str]}
@@ -97,18 +112,27 @@ class RealAIProvider(BaseAIProvider):
         self.max_tokens = max_tokens
         self.temperature = temperature
 
-    async def generate_card(self, url: str, content: str) -> dict:
+    async def generate_card(
+        self, url: str, content: str, candidate_tags: Optional[List[str]] = None
+    ) -> dict:
         """调用 LLM 生成卡片（JSON mode + Pydantic 校验 + Embedding 降级）"""
-        # 1. 加载并填充 Prompt
+        # 1. 加载并填充 Prompt（注入候选标签库，引导 AI 优先复用）
         prompt_template = _load_prompt("card_generation")
-        user_prompt = prompt_template.format(url=url, content=content or "(正文为空)")
+        user_prompt = prompt_template.format(
+            url=url,
+            content=content or "(正文为空)",
+            candidate_tags="、".join(candidate_tags) if candidate_tags else "（暂无）",
+        )
 
         # 2. 调用 LLM（JSON mode，兼容 DeepSeek 等非 OpenAI 服务）
         try:
             completion = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "你是 FlowShelf 的知识策展助手，必须严格按 JSON 格式输出。"},
+                    {
+                        "role": "system",
+                        "content": "你是 FlowShelf 的知识策展助手，必须严格按 JSON 格式输出。",
+                    },
                     {"role": "user", "content": user_prompt},
                 ],
                 response_format={"type": "json_object"},
@@ -166,14 +190,32 @@ class RealAIProvider(BaseAIProvider):
             logger.warning("Embedding 降级为 hash 向量：%s", exc)
             return _hash_embedding(text)
 
-    async def classify_tool(self, url: str, title: str, content: str) -> dict:
-        """调用 LLM 分类工具（JSON mode）"""
+    async def classify_tool(
+        self,
+        url: str,
+        title: str,
+        content: str,
+        candidate_tags: Optional[List[str]] = None,
+    ) -> dict:
+        """调用 LLM 分类工具（JSON mode + 候选标签库注入）"""
+        # 加载 Prompt 模板并注入候选标签库，引导 AI 优先复用现有标签
+        prompt_template = _load_prompt("tool_classification")
+        user_prompt = prompt_template.format(
+            url=url,
+            title=title,
+            content=(content or "")[:1000],
+            candidate_tags="、".join(candidate_tags) if candidate_tags else "（暂无）",
+        )
+
         try:
             completion = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "你是 FlowShelf 的收藏分流助手，判断网页类型并给出标签。输出 JSON：{\"type\": \"tool|article|video\", \"tags\": [\"标签\"]}"},
-                    {"role": "user", "content": f"URL: {url}\n标题: {title}\n正文片段: {(content or '')[:1000]}"},
+                    {
+                        "role": "system",
+                        "content": "你是 FlowShelf 的收藏分流助手，必须严格按 JSON 格式输出。",
+                    },
+                    {"role": "user", "content": user_prompt},
                 ],
                 response_format={"type": "json_object"},
                 max_tokens=200,
@@ -195,7 +237,9 @@ class RealAIProvider(BaseAIProvider):
 class DemoAIProvider(BaseAIProvider):
     """DEMO 模式 AI Provider（返回模拟数据）"""
 
-    async def generate_card(self, url: str, content: str) -> dict:
+    async def generate_card(
+        self, url: str, content: str, candidate_tags: Optional[List[str]] = None
+    ) -> dict:
         """返回模拟卡片数据"""
         return {
             "title": f"来自 {url[:30]} 的卡片",
@@ -203,7 +247,7 @@ class DemoAIProvider(BaseAIProvider):
             "key_points": [
                 "核心观点 1：技术选型需要综合考虑成本和性能",
                 "核心观点 2：良好的架构设计是项目成功的关键",
-                "核心观点 3：持续的迭代和优化比一次性完美更重要"
+                "核心观点 3：持续的迭代和优化比一次性完美更重要",
             ],
             "tags": ["技术", "架构", "最佳实践"],
             "embedding": [0.1] * 1536,
@@ -213,10 +257,18 @@ class DemoAIProvider(BaseAIProvider):
         """返回模拟向量"""
         return _hash_embedding(text)
 
-    async def classify_tool(self, url: str, title: str, content: str) -> dict:
+    async def classify_tool(
+        self,
+        url: str,
+        title: str,
+        content: str,
+        candidate_tags: Optional[List[str]] = None,
+    ) -> dict:
         """返回模拟分类结果"""
         url_lower = url.lower()
-        if any(keyword in url_lower for keyword in ["tool", "app", "dashboard", "console"]):
+        if any(
+            keyword in url_lower for keyword in ["tool", "app", "dashboard", "console"]
+        ):
             return {"type": "tool", "tags": ["工具", "常用"]}
         elif any(keyword in url_lower for keyword in ["video", "youtube", "bilibili"]):
             return {"type": "video", "tags": ["视频"]}

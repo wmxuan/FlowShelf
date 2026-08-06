@@ -1,6 +1,7 @@
 """
 工具箱 API 路由
 """
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
@@ -10,7 +11,11 @@ from app.core.config import get_settings
 from app.providers.base import get_ai_provider
 from app.services.tool_service import ToolService
 from app.db.schemas.schemas import (
-    ToolCreate, ToolUpdate, ToolResponse, MessageResponse
+    ToolCreate,
+    ToolUpdate,
+    ToolResponse,
+    MessageResponse,
+    TagCount,
 )
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
@@ -25,16 +30,19 @@ async def create_tool(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = ToolService(db, ai_provider)
-    
+
     tool = await service.create_tool(
-        url=request.url,
-        title=request.title,
-        description=request.description
+        url=request.url, title=request.title, description=request.description
     )
-    
+
     return tool
 
 
@@ -50,18 +58,42 @@ async def list_tools(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = ToolService(db, ai_provider)
-    
+
     tools = await service.get_tools(
         skip=skip,
         limit=limit,
         tag=tag,
         sort_by=sort_by,
     )
-    
+
     return tools
+
+
+@router.get("/tags", response_model=List[TagCount])
+async def list_tags(
+    db: AsyncSession = Depends(get_db),
+):
+    """获取所有标签及其工具计数（独立于工具列表筛选）"""
+    settings = get_settings()
+    ai_provider = get_ai_provider(
+        demo_mode=settings.DEMO_MODE,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
+    )
+    service = ToolService(db, ai_provider)
+    return await service.get_tags_with_count()
 
 
 @router.get("/{tool_id}", response_model=ToolResponse)
@@ -73,14 +105,19 @@ async def get_tool(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = ToolService(db, ai_provider)
-    
+
     tool = await service.get_tool(tool_id)
     if not tool:
         raise HTTPException(status_code=404, detail="工具不存在")
-    
+
     return tool
 
 
@@ -94,14 +131,19 @@ async def update_tool(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = ToolService(db, ai_provider)
-    
+
     tool = await service.update_tool(tool_id, update_data)
     if not tool:
         raise HTTPException(status_code=404, detail="工具不存在")
-    
+
     return tool
 
 
@@ -114,14 +156,19 @@ async def delete_tool(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = ToolService(db, ai_provider)
-    
+
     success = await service.delete_tool(tool_id)
     if not success:
         raise HTTPException(status_code=404, detail="工具不存在")
-    
+
     return MessageResponse(message="工具已删除")
 
 
@@ -134,12 +181,17 @@ async def increment_visit(
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
     )
     service = ToolService(db, ai_provider)
-    
+
     tool = await service.increment_visit(tool_id)
     if not tool:
         raise HTTPException(status_code=404, detail="工具不存在")
-    
+
     return tool

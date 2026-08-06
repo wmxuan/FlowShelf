@@ -14,6 +14,7 @@ export default function CardsPage() {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [allTags, setAllTags] = useState<TagCount[]>([]);
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
+  const [showAllTags, setShowAllTags] = useState(false);
 
   const fetchCards = async (tag?: string) => {
     setIsLoading(true);
@@ -97,7 +98,7 @@ export default function CardsPage() {
           >
             全部
           </button>
-          {allTags.map((t) => (
+          {(showAllTags ? allTags : allTags.slice(0, 15)).map((t) => (
             <button
               key={t.name}
               onClick={() => setActiveTag(t.name === activeTag ? null : t.name)}
@@ -107,6 +108,14 @@ export default function CardsPage() {
               <span className="ml-1 opacity-60">{t.count}</span>
             </button>
           ))}
+          {allTags.length > 15 && (
+            <button
+              onClick={() => setShowAllTags(!showAllTags)}
+              className="badge badge-secondary"
+            >
+              {showAllTags ? '收起' : `+${allTags.length - 15} 更多`}
+            </button>
+          )}
         </div>
       )}
 
