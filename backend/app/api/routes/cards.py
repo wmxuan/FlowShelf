@@ -41,8 +41,23 @@ async def create_card(
     )
     service = CardService(db, ai_provider)
 
+    # 若携带预览数据（title + ai_summary），走「预览保存」路径，
+    # 跳过 AI 生成，保留用户在预览阶段编辑后的内容
+    preview_data = None
+    if request.title and request.ai_summary is not None:
+        preview_data = {
+            "title": request.title,
+            "ai_summary": request.ai_summary,
+            "key_points": request.key_points or [],
+            "ai_tags": request.ai_tags or [],
+        }
+
     try:
-        card = await service.create_card(url=request.source_url)
+        card = await service.create_card(
+            url=request.source_url,
+            content=request.content,
+            preview_data=preview_data,
+        )
     except ValueError as exc:
         # 正文抽取失败 → 422，给用户清晰反馈
         raise HTTPException(status_code=422, detail=str(exc))
@@ -61,7 +76,9 @@ async def list_cards(
     limit: int = Query(20, ge=1, le=100),
     tag: Optional[str] = None,
     days: Optional[int] = None,
-    q: Optional[str] = Query(None, description="关键词搜索（提供时忽略标签筛选优先级，按相关度排序）"),
+    q: Optional[str] = Query(
+        None, description="关键词搜索（提供时忽略标签筛选优先级，按相关度排序）"
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """获取卡片列表（支持关键词搜索 + 标签/天数组合筛选）"""
@@ -206,7 +223,9 @@ async def generate_card(
     service = CardService(db, ai_provider)
 
     try:
-        result = await service.generate_card_preview(request.url)
+        result = await service.generate_card_preview(
+            request.url, content=request.content
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
@@ -215,5 +234,8 @@ async def generate_card(
         )
 
     return CardGenerationResponse(
-        summary=result["summary"], key_points=result["key_points"], tags=result["tags"]
+        title=result["title"],
+        summary=result["summary"],
+        key_points=result["key_points"],
+        tags=result["tags"],
     )

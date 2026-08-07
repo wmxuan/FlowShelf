@@ -1,0 +1,213 @@
+{
+  "label": "v0.2",
+  "results": [
+    {
+      "label": "技术教程",
+      "url": "https://fastapi.tiangolo.com/tutorial/first-steps/",
+      "extracted_title": "First Steps - FastAPI",
+      "content_chars": 11870,
+      "title": "FastAPI 第一步：快速上手指南",
+      "summary": "本文是 FastAPI 官方教程的第一部分，介绍了如何创建并运行一个最简单的 FastAPI 应用。通过一个包含路径操作装饰器和异步函数的示例，展示了如何定义 API 端点并返回 JSON 响应。文章还说明了如何启动开发服务器、访问自动生成的交互式 API 文档（Swagger UI 和 ReDoc），以及 FastAPI 如何基于 OpenAPI 标准自动生成 API 模式。此外，还介绍了如何通过 pyproject.toml 配置应用入口点，以及可选的云部署方式。",
+      "summary_chars": 236,
+      "key_points": [
+        "FastAPI 通过装饰器定义路径操作，如 @app.get(\"/\") 处理 GET 请求。",
+        "运行 fastapi dev 命令可启动开发服务器，并自动生成交互式 API 文档。",
+        "FastAPI 基于 OpenAPI 标准自动生成 API 模式，支持 Swagger UI 和 ReDoc 两种文档界面。",
+        "可通过 pyproject.toml 中的 [tool.fastapi] entrypoint 配置应用入口点，便于工具识别。",
+        "FastAPI 应用可一键部署到 FastAPI Cloud，也支持部署到任何云提供商。"
+      ],
+      "key_points_count": 5,
+      "tags_raw": [
+        "API",
+        "技术",
+        "最佳实践"
+      ],
+      "tags_normalized": [
+        "API",
+        "技术",
+        "最佳实践"
+      ],
+      "tokens": {
+        "prompt": 3503,
+        "completion": 274,
+        "total": 3777
+      },
+      "cost_usd": 0.000567,
+      "latency_ms": {
+        "extract": 679.3,
+        "llm": 4609.3,
+        "total": 5290.5
+      },
+      "parse_ok": true,
+      "parse_error": null
+    },
+    {
+      "label": "博客周刊",
+      "url": "https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html",
+      "extracted_title": "科技爱好者周刊（第 288 期）：技术写作的首要诀窍 - 阮一峰的网络日志",
+      "content_chars": 5359,
+      "title": "技术写作的首要诀窍：单线结构",
+      "summary": "本文是阮一峰科技爱好者周刊第288期，核心观点是技术写作的首要诀窍在于采用单线结构，即一篇文章只说一件事，按线性顺序由浅入深叙述。文章强调技术写作评价标准是表达清楚，而非艺术性，关键在于思想清晰。复杂问题应拆分为多篇单线文章。文中还包含科技动态、工具、资源、文摘和言论等栏目。",
+      "summary_chars": 138,
+      "key_points": [
+        "技术写作好坏主要取决于思想是否清楚，而非语文水平。",
+        "单线结构是技术写作的首要诀窍，一篇文章只讲一点并讲透。",
+        "复杂问题应拆分成多篇单线文章，避免多线交叉导致读者困惑。",
+        "人类思维非线性，需耐心梳理成单线结构才能清晰表达。"
+      ],
+      "key_points_count": 4,
+      "tags_raw": [
+        "技术",
+        "最佳实践",
+        "技术综述"
+      ],
+      "tags_normalized": [
+        "技术",
+        "最佳实践",
+        "技术综述"
+      ],
+      "tokens": {
+        "prompt": 3277,
+        "completion": 199,
+        "total": 3476
+      },
+      "cost_usd": 0.000515,
+      "latency_ms": {
+        "extract": 738.0,
+        "llm": 2648.0,
+        "total": 3386.5
+      },
+      "parse_ok": true,
+      "parse_error": null
+    },
+    {
+      "label": "RAG教程",
+      "url": "https://datawhalechina.github.io/easy-vibe/zh-cn/stage-3/ai-advanced/rag-introduction/",
+      "extracted_title": "本节课你将学到 | Easy-Vibe 教程",
+      "content_chars": 48141,
+      "title": "RAG技术综述：从原理到企业级实践",
+      "summary": "本文系统介绍了检索增强生成（RAG）技术，阐述了其解决大模型知识滞后、幻觉等问题的核心价值，详细讲解了RAG的工作原理、技术演进（Naive、Advanced、Modular RAG）、模型选型、企业级系统构建、效果评测方法，并探讨了Graph RAG、多模态RAG、Late Chunking及Agentic RAG等前沿方向，为构建可信AI应用提供了全链路指南。",
+      "summary_chars": 183,
+      "key_points": [
+        "RAG通过先检索后生成，以低成本、高准确性和可控性解决长上下文在成本、注意力、知识更新上的难题。",
+        "RAG技术经历了从Naive RAG到Advanced RAG再到Modular RAG的演进，逐步实现检索与生成的精细化与模块化。",
+        "企业级RAG系统需关注数据预处理、模型选型（Embedding、Rerank、LLM）及效果评测，以保障系统质量。",
+        "RAG正与图结构、多模态、智能体等技术融合，向更深层语义理解和主动认知方向发展。"
+      ],
+      "key_points_count": 4,
+      "tags_raw": [
+        "RAG",
+        "大模型",
+        "技术综述",
+        "企业应用",
+        "最佳实践"
+      ],
+      "tags_normalized": [
+        "RAG",
+        "大模型",
+        "技术综述",
+        "企业应用",
+        "最佳实践"
+      ],
+      "tokens": {
+        "prompt": 24872,
+        "completion": 279,
+        "total": 25151
+      },
+      "cost_usd": 0.00356,
+      "latency_ms": {
+        "extract": 893.2,
+        "llm": 3875.1,
+        "total": 4769.1
+      },
+      "parse_ok": true,
+      "parse_error": null
+    },
+    {
+      "label": "掘金文章",
+      "url": "https://juejin.cn/post/6844903938093744135",
+      "extracted_title": "精读《React Hooks 最佳实践》React 16.8 于 2019.2 正式发布，这是一个能提升代码质量和开发效 - 掘金",
+      "content_chars": 5851,
+      "title": "React Hooks 最佳实践精读",
+      "summary": "本文基于 React 16.8 正式发布的 Hooks 特性，提出了一套团队协作下的最佳实践方案。核心包括：使用 const 箭头函数定义组件，并用 useMemo 优化渲染；局部状态优先使用 useState 和 useRef，避免 useReducer；函数必须用 useCallback 包裹；区分操作型和渲染型发请求；通过 Context 和 useReducer 实现组件间通信；利用 useDebounce 优化性能瓶颈；并强调 useEffect 的依赖引用正确性，避免死循环。",
+      "summary_chars": 246,
+      "key_points": [
+        "组件定义推荐 const 箭头函数 + React.FC 类型 + useMemo 优化渲染",
+        "局部状态优先 useState 和 useRef，useReducer 仅用于多组件通信场景",
+        "函数内所有函数需用 useCallback 包裹，并正确填写依赖项",
+        "渲染型发请求应抽象为 useAsync，依赖变化时自动重新取数",
+        "useEffect 需警惕父级引用变化导致死循环，可用 useDeepCompareEffect 或 useCurrentValue 规避"
+      ],
+      "key_points_count": 5,
+      "tags_raw": [
+        "技术",
+        "最佳实践",
+        "React",
+        "Hooks",
+        "前端"
+      ],
+      "tags_normalized": [
+        "技术",
+        "最佳实践",
+        "React",
+        "Hooks",
+        "前端"
+      ],
+      "tokens": {
+        "prompt": 2541,
+        "completion": 254,
+        "total": 2795
+      },
+      "cost_usd": 0.000427,
+      "latency_ms": {
+        "extract": 732.2,
+        "llm": 3881.7,
+        "total": 4614.6
+      },
+      "parse_ok": true,
+      "parse_error": null
+    },
+    {
+      "label": "API文档",
+      "url": "https://docs.bigmodel.cn/cn/guide/start/concept-param",
+      "extracted_title": "核心参数 - 智谱AI开放文档",
+      "content_chars": 1791,
+      "title": "智谱AI大模型API参数详解与配置指南",
+      "summary": "本文详细介绍了智谱AI大模型API的关键参数及其配置建议，包括do_sample、temperature、top_p、max_tokens、stream、thinking和reasoning_effort等。文章指出，do_sample控制采样策略，temperature和top_p调节随机性，max_tokens限制输出长度，stream支持流式输出，thinking和reasoning_effort用于控制思维链和推理深度。同时，文章还涉及Token用量计算、上下文窗口和并发数权益等概念，帮助用户优化API调用。",
+      "summary_chars": 261,
+      "key_points": [
+        "do_sample设为false可获得确定性输出，设为true配合temperature或top_p增加多样性。",
+        "temperature和top_p建议只调整其中一个，避免同时修改。",
+        "max_tokens限制生成内容长度，不包括输入，需根据场景合理设置。",
+        "stream设为true可提升实时交互应用体验，如聊天机器人。",
+        "thinking和reasoning_effort用于控制思维链和推理深度，复杂任务建议开启。"
+      ],
+      "key_points_count": 5,
+      "tags_raw": [
+        "大模型",
+        "API",
+        "最佳实践",
+        "技术"
+      ],
+      "tags_normalized": [
+        "大模型",
+        "API",
+        "最佳实践",
+        "技术"
+      ],
+      "tokens": {
+        "prompt": 1328,
+        "completion": 243,
+        "total": 1571
+      },
+      "cost_usd": 0.000254,
+      "latency_ms": {
+        "extract": 1362.4,
+        "llm": 3405.9,
+        "total": 4769.0
+      },
+      "parse_ok": true,
+      "parse_error": null
+    }
+  ]
+}

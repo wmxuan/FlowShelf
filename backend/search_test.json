@@ -1,0 +1,43 @@
+[
+  {
+    "query": "fastapi",
+    "phase": "cold_start",
+    "latency_ms": 146.2,
+    "results": 8
+  },
+  {
+    "query": "RAG",
+    "phase": "warm",
+    "latency_ms": 241.6,
+    "results": 4,
+    "top": "RAG技术入门：从原理到企业级实践"
+  },
+  {
+    "query": "React Hooks",
+    "phase": "warm",
+    "latency_ms": 82.4,
+    "results": 8,
+    "top": "React Hooks 最佳实践精读"
+  },
+  {
+    "query": "API 开发",
+    "phase": "warm",
+    "latency_ms": 54.6,
+    "results": 9,
+    "top": "智谱AI大模型API参数详解与使用指南"
+  },
+  {
+    "query": "大模型",
+    "phase": "warm",
+    "latency_ms": 56.0,
+    "results": 3,
+    "top": "智谱AI大模型API参数详解与使用指南"
+  },
+  {
+    "query": "python 教程",
+    "phase": "warm",
+    "latency_ms": 64.1,
+    "results": 8,
+    "top": "SQLZoo SQL互动教程"
+  }
+]

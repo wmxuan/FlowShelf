@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { FileText, Tag, Calendar, Sparkles, ExternalLink, Trash2, Search, X } from 'lucide-react';
+import { FileText, Tag, Calendar, Sparkles, ExternalLink, Trash2, Search, X, Plus } from 'lucide-react';
 import { cardsApi } from '@/services/api';
 import type { Card, TagCount } from '@/types';
-import URLInput from '@/components/URLInput';
+import AddCardModal from '@/components/AddCardModal';
 import CardDetailModal from '@/components/CardDetailModal';
 
 export default function CardsPage() {
@@ -14,6 +14,7 @@ export default function CardsPage() {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [allTags, setAllTags] = useState<TagCount[]>([]);
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [showAllTags, setShowAllTags] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -97,18 +98,14 @@ export default function CardsPage() {
             已沉淀 {cards.length} 张卡片，AI 自动生成摘要和标签
           </p>
         </div>
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="button button-primary"
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          新增卡片
+        </button>
       </div>
-
-      {/* URL 输入 */}
-      <URLInput
-        onCardCreated={() => {
-          fetchCards(
-            isSearching ? undefined : activeTag || undefined,
-            isSearching ? searchQuery.trim() : undefined
-          );
-          fetchTags();
-        }}
-      />
 
       {/* 搜索框 */}
       <form onSubmit={handleSearchSubmit} className="flex gap-2">
@@ -299,6 +296,19 @@ export default function CardsPage() {
         card={selectedCard}
         onClose={() => setSelectedCard(null)}
         onUpdated={handleUpdated}
+      />
+
+      {/* 新增卡片弹窗 */}
+      <AddCardModal
+        open={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onCreated={() => {
+          fetchCards(
+            isSearching ? undefined : activeTag || undefined,
+            isSearching ? searchQuery.trim() : undefined
+          );
+          fetchTags();
+        }}
       />
     </div>
   );

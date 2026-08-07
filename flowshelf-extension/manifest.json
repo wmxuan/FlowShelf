@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "FlowShelf",
+  "version": "0.1.0",
+  "description": "AI 原生的个人数字资产管家 - 浏览器扩展",
+  "action": {
+    "default_title": "FlowShelf",
+    "default_popup": "src/popup/index.html"
+  },
+  "permissions": ["storage", "tabs", "activeTab", "contextMenus", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "commands": {
+    "collect-current-page": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "收藏当前页面到 FlowShelf"
+    }
+  }
+}

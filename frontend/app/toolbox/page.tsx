@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Wrench, Tag, Clock, Eye, Trash2, ExternalLink, Search, X } from 'lucide-react';
+import { Wrench, Tag, Clock, Eye, Trash2, ExternalLink, Search, X, Plus } from 'lucide-react';
 import { toolsApi } from '@/services/api';
+import AddToolModal from '@/components/AddToolModal';
 import type { Tool, TagCount } from '@/types';
 
 export default function ToolboxPage() {
@@ -11,9 +12,7 @@ export default function ToolboxPage() {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [allTags, setAllTags] = useState<TagCount[]>([]);
   const [sortBy, setSortBy] = useState('created_at');
-  const [newToolUrl, setNewToolUrl] = useState('');
-  const [newToolTitle, setNewToolTitle] = useState('');
-  const [showAddForm, setShowAddForm] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [showAllTags, setShowAllTags] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -65,23 +64,6 @@ export default function ToolboxPage() {
     fetchTags();
   }, []);
 
-  const handleAddTool = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newToolUrl.trim() || !newToolTitle.trim()) return;
-
-    try {
-      await toolsApi.create(newToolUrl, newToolTitle);
-      setNewToolUrl('');
-      setNewToolTitle('');
-      setShowAddForm(false);
-      fetchTools();
-      fetchTags();
-    } catch (err) {
-      console.error('添加工具失败:', err);
-      alert('添加失败');
-    }
-  };
-
   const handleDelete = async (id: number) => {
     if (!confirm('确定删除这个工具吗？')) return;
     try {
@@ -116,45 +98,13 @@ export default function ToolboxPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowAddForm(!showAddForm)}
+          onClick={() => setShowAddModal(true)}
           className="button button-primary"
         >
-          {showAddForm ? '取消' : '+ 添加工具'}
+          <Plus className="mr-2 h-4 w-4" />
+          添加工具
         </button>
       </div>
-
-      {/* 添加表单 */}
-      {showAddForm && (
-        <form onSubmit={handleAddTool} className="card space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="label">工具 URL</label>
-              <input
-                type="url"
-                value={newToolUrl}
-                onChange={(e) => setNewToolUrl(e.target.value)}
-                placeholder="https://example.com"
-                className="input mt-1"
-                required
-              />
-            </div>
-            <div>
-              <label className="label">工具名称</label>
-              <input
-                type="text"
-                value={newToolTitle}
-                onChange={(e) => setNewToolTitle(e.target.value)}
-                placeholder="给这个工具起个名字"
-                className="input mt-1"
-                required
-              />
-            </div>
-          </div>
-          <button type="submit" className="button button-primary w-full">
-            收藏到工具箱
-          </button>
-        </form>
-      )}
 
       {/* 搜索框 */}
       <form onSubmit={handleSearchSubmit} className="flex gap-2">
@@ -331,6 +281,16 @@ export default function ToolboxPage() {
           ))}
         </div>
       )}
+
+      {/* 添加工具弹窗 */}
+      <AddToolModal
+        open={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onCreated={() => {
+          fetchTools();
+          fetchTags();
+        }}
+      />
     </div>
   );
 }

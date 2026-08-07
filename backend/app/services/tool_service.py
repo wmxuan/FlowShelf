@@ -26,7 +26,12 @@ class ToolService:
         self.ai_provider = ai_provider
 
     async def create_tool(
-        self, url: str, title: str, description: Optional[str] = None
+        self,
+        url: str,
+        title: str,
+        description: Optional[str] = None,
+        ai_tags: Optional[List[str]] = None,
+        content: Optional[str] = None,
     ) -> Tool:
         """
         收藏工具（抓取页面正文 + AI 判断实际作用并打标签）
@@ -35,32 +40,45 @@ class ToolService:
             url: 工具 URL
             title: 工具标题
             description: 描述
+            ai_tags: 预生成的标签（来自 generate 预览）。传入则跳过 AI 分类直接复用，
+                     避免预览与最终保存结果不一致；为 None 时走 AI 分类流程。
+            content: 可选，扩展端预提取的正文。传入则跳过 content_extractor，
+                     规避反爬 / 重定向循环。
 
         Returns:
             Tool 模型实例
         """
         # Step 1: 抓取页面正文，让 AI 基于实际内容判断工具作用
         # 工具箱是终点站，抓取失败不阻断收藏，降级为 url+title 打标签
+        # 扩展端预提取正文优先，避免后端抓取遇到反爬/重定向循环
         content_text = ""
-        try:
-            extraction = await content_extractor.extract(url)
-            if extraction.success:
-                content_text = extraction.content
-            else:
-                logger.warning(
-                    "工具页面抓取失败，降级为 url+title 打标签: %s", extraction.error
-                )
-        except Exception as exc:  # noqa: BLE001 - 抓取兜底
-            logger.warning("工具页面抓取异常，降级为 url+title 打标签: %s", exc)
+        if content:
+            content_text = content
+            logger.info("工具收藏使用扩展端预提取正文（%d 字符）", len(content_text))
+        else:
+            try:
+                extraction = await content_extractor.extract(url)
+                if extraction.success:
+                    content_text = extraction.content
+                else:
+                    logger.warning(
+                        "工具页面抓取失败，降级为 url+title 打标签: %s",
+                        extraction.error,
+                    )
+            except Exception as exc:  # noqa: BLE001 - 抓取兜底
+                logger.warning("工具页面抓取异常，降级为 url+title 打标签: %s", exc)
 
-        # Step 2: 查候选标签库 + AI 分类打标签（注入候选引导 AI 优先复用现有标签）
+        # Step 2: 标签来源——预生成标签（来自 generate 预览）优先；否则 AI 分类打标签
         candidates = await get_candidate_tags(self.db, "tools", top_n=30)
-        classify_result = await self.ai_provider.classify_tool(
-            url, title, content_text, candidate_tags=candidates
-        )
-
-        # Step 2.5: 标签归一化（相似度去重，归并到已有标签，抑制同义标签膨胀）
-        normalized_tags = normalize_tags(classify_result["tags"], candidates)
+        if ai_tags is not None:
+            # 预览阶段已归一化，直接复用，避免重复 AI 调用并保证预览与保存一致
+            normalized_tags = ai_tags
+        else:
+            classify_result = await self.ai_provider.classify_tool(
+                url, title, content_text, candidate_tags=candidates
+            )
+            # Step 2.5: 标签归一化（相似度去重，归并到已有标签，抑制同义标签膨胀）
+            normalized_tags = normalize_tags(classify_result["tags"], candidates)
 
         # Step 2.6: 生成 embedding（用于语义检索；失败降级为 hash 向量，不阻断收藏）
         embed_text = " ".join([title, *normalized_tags, description or ""])
@@ -80,6 +98,44 @@ class ToolService:
         await self.db.refresh(new_tool)
 
         return new_tool
+
+    async def generate_tool_preview(
+        self, url: str, content: Optional[str] = None
+    ) -> dict:
+        """
+        仅预览 AI 生成的工具信息（标题 + 描述 + 标签），不写库。
+
+        抓取失败时降级为空正文交给 AI，不抛异常（工具箱是终点站，宽容处理）。
+        扩展端可传入预提取正文，跳过后端 content_extractor。
+
+        Returns:
+            {"title", "description", "tags"}
+        """
+        content_text = ""
+        if content:
+            content_text = content
+            logger.info("工具预览使用扩展端预提取正文（%d 字符）", len(content_text))
+        else:
+            try:
+                extraction = await content_extractor.extract(url)
+                if extraction.success:
+                    content_text = extraction.content
+                else:
+                    logger.warning(
+                        "工具页面抓取失败，降级为空正文交 AI: %s", extraction.error
+                    )
+            except Exception as exc:  # noqa: BLE001 - 抓取兜底
+                logger.warning("工具页面抓取异常，降级为空正文交 AI: %s", exc)
+
+        candidates = await get_candidate_tags(self.db, "tools", top_n=30)
+        result = await self.ai_provider.generate_tool(
+            url, content_text, candidate_tags=candidates
+        )
+        return {
+            "title": result["title"],
+            "description": result["description"],
+            "tags": normalize_tags(result["tags"], candidates),
+        }
 
     async def get_tools(
         self,

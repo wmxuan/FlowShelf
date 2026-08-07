@@ -27,18 +27,18 @@ export default function CardDetailModal({
   onUpdated,
 }: CardDetailModalProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [keyPointsText, setKeyPointsText] = useState('');
-  const [tagsText, setTagsText] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // 同步 card 到表单，切换卡片时重置
   useEffect(() => {
     if (card) {
+      setTitle(card.title || '');
       setSummary(card.ai_summary || '');
       setKeyPointsText((card.key_points || []).join('\n'));
-      setTagsText((card.ai_tags || []).join(', '));
       setIsEditing(false);
       setError(null);
     }
@@ -64,14 +64,10 @@ export default function CardDetailModal({
         .split('\n')
         .map((s) => s.trim())
         .filter(Boolean);
-      const newTags = tagsText
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
       const updated = await cardsApi.update(card.id, {
+        title: title.trim(),
         ai_summary: summary,
         key_points: newKeyPoints,
-        ai_tags: newTags,
       });
       onUpdated(updated);
       setIsEditing(false);
@@ -84,25 +80,38 @@ export default function CardDetailModal({
 
   const handleCancelEdit = () => {
     // 还原表单到原始值
+    setTitle(card.title || '');
     setSummary(card.ai_summary || '');
     setKeyPointsText((card.key_points || []).join('\n'));
-    setTagsText((card.ai_tags || []).join(', '));
     setIsEditing(false);
     setError(null);
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-[100] !m-0 flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
     >
       <div
-        className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-border bg-card shadow-lg"
+        className="flex h-[85vh] w-full max-w-2xl flex-col rounded-lg border border-border bg-card shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-2 border-b border-border bg-card p-6">
-          <h2 className="flex-1 break-words text-xl font-bold">{card.title}</h2>
+        <div className="flex flex-shrink-0 items-start justify-between gap-2 border-b border-border bg-card p-6">
+          {isEditing ? (
+            <div className="flex-1">
+              <label className="label mb-1 block">标题</label>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="input"
+                disabled={isSaving}
+              />
+            </div>
+          ) : (
+            <h2 className="flex-1 break-words text-xl font-bold">{card.title}</h2>
+          )}
           <button
             onClick={onClose}
             className="shrink-0 rounded p-1 transition-colors hover:bg-muted"
@@ -113,7 +122,7 @@ export default function CardDetailModal({
         </div>
 
         {/* 内容 */}
-        <div className="space-y-5 p-6">
+        <div className="flex-1 space-y-5 overflow-y-auto p-6">
           {/* 元信息 */}
           <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
@@ -180,22 +189,13 @@ export default function CardDetailModal({
             )}
           </div>
 
-          {/* 标签 */}
+          {/* 标签（只读，AI 生成） */}
           <div>
             <h3 className="mb-2 flex items-center gap-1 text-sm font-semibold">
               <TagIcon className="h-4 w-4 text-primary" />
               标签
             </h3>
-            {isEditing ? (
-              <input
-                type="text"
-                value={tagsText}
-                onChange={(e) => setTagsText(e.target.value)}
-                className="input"
-                placeholder="多个标签用英文逗号分隔"
-                disabled={isSaving}
-              />
-            ) : (card.ai_tags || []).length > 0 ? (
+            {(card.ai_tags || []).length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 {card.ai_tags.map((tag, i) => (
                   <span key={i} className="badge badge-secondary">
@@ -212,7 +212,7 @@ export default function CardDetailModal({
         </div>
 
         {/* 底部操作 */}
-        <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border bg-card p-4">
+        <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-border bg-card p-4">
           {isEditing ? (
             <>
               <button

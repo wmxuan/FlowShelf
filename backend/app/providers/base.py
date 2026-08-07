@@ -22,7 +22,11 @@ from typing import List, Optional
 
 from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
 
-from app.db.schemas.ai_schemas import CardAIOutput, ToolClassificationOutput
+from app.db.schemas.ai_schemas import (
+    CardAIOutput,
+    ToolClassificationOutput,
+    ToolGenerationOutput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +148,26 @@ class BaseAIProvider(ABC):
 
         Returns:
             {"type": str, "tags": List[str]}
+        """
+        pass
+
+    @abstractmethod
+    async def generate_tool(
+        self,
+        url: str,
+        content: str,
+        candidate_tags: Optional[List[str]] = None,
+    ) -> dict:
+        """
+        AI 生成工具信息（标题 + 描述 + 标签），用于预览，不写库
+
+        Args:
+            url: 工具 URL
+            content: 抓取到的页面正文
+            candidate_tags: 现有高频标签，注入 Prompt 引导 AI 优先复用，抑制标签膨胀
+
+        Returns:
+            {"title": str, "description": str, "tags": List[str]}
         """
         pass
 
@@ -270,7 +294,7 @@ class RealAIProvider(BaseAIProvider):
         user_prompt = prompt_template.format(
             url=url,
             title=title,
-            content=(content or "")[:1000],
+            content=(content or "")[:2500],
             candidate_tags="、".join(candidate_tags) if candidate_tags else "（暂无）",
         )
 
@@ -286,7 +310,7 @@ class RealAIProvider(BaseAIProvider):
                 ],
                 response_format={"type": "json_object"},
                 max_tokens=200,
-                temperature=self.temperature,
+                temperature=0.0,
             )
         except (APITimeoutError, RateLimitError, APIError) as exc:
             logger.warning("AI 分类失败，降级为 article：%s", exc)
@@ -299,6 +323,58 @@ class RealAIProvider(BaseAIProvider):
         except Exception:
             logger.warning("AI 分类输出解析失败，降级为 article")
             return {"type": "article", "tags": []}
+
+    async def generate_tool(
+        self,
+        url: str,
+        content: str,
+        candidate_tags: Optional[List[str]] = None,
+    ) -> dict:
+        """调用 LLM 生成工具信息（标题 + 描述 + 标签），用于预览"""
+        prompt_template = _load_prompt("tool_generation")
+        user_prompt = prompt_template.format(
+            url=url,
+            content=(content or "")[:2000],
+            candidate_tags="、".join(candidate_tags) if candidate_tags else "（暂无）",
+        )
+
+        try:
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是 FlowShelf 的工具箱策展助手，必须严格按 JSON 格式输出。",
+                    },
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=300,
+                temperature=self.temperature,
+            )
+        except APITimeoutError:
+            raise RuntimeError("AI 调用超时")
+        except RateLimitError:
+            raise RuntimeError("AI 调用触发限流，请稍后重试")
+        except APIError as exc:
+            raise RuntimeError(f"AI 调用失败：{exc.__class__.__name__}: {exc}")
+
+        raw = completion.choices[0].message.content or ""
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"AI 返回非合法 JSON：{raw[:200]}")
+
+        try:
+            parsed = ToolGenerationOutput.model_validate(data)
+        except Exception as exc:
+            raise RuntimeError(f"AI 输出校验失败：{exc}")
+
+        return {
+            "title": parsed.title,
+            "description": parsed.description,
+            "tags": parsed.tags,
+        }
 
 
 class DemoAIProvider(BaseAIProvider):
@@ -343,6 +419,25 @@ class DemoAIProvider(BaseAIProvider):
             return {"type": "video", "tags": ["视频"]}
         else:
             return {"type": "article", "tags": ["文章", "待学习"]}
+
+    async def generate_tool(
+        self,
+        url: str,
+        content: str,
+        candidate_tags: Optional[List[str]] = None,
+    ) -> dict:
+        """返回模拟工具生成数据"""
+        from urllib.parse import urlparse
+
+        try:
+            host = urlparse(url).netloc.replace("www.", "")
+        except Exception:
+            host = url[:30]
+        return {
+            "title": f"来自 {host} 的工具",
+            "description": "这是一个在线工具，可帮助用户高效完成特定任务。",
+            "tags": ["工具", "常用"],
+        }
 
 
 def _create_embedding_provider_from_settings():
