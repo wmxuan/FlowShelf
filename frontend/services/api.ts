@@ -37,12 +37,13 @@ export const cardsApi = {
       body: JSON.stringify({ source_url: url }),
     }),
   
-  list: (params?: { skip?: number; limit?: number; tag?: string; days?: number }) => {
+  list: (params?: { skip?: number; limit?: number; tag?: string; days?: number; q?: string }) => {
     const queryString = new URLSearchParams();
     if (params?.skip) queryString.set('skip', String(params.skip));
     if (params?.limit) queryString.set('limit', String(params.limit));
     if (params?.tag) queryString.set('tag', params.tag);
     if (params?.days) queryString.set('days', String(params.days));
+    if (params?.q) queryString.set('q', params.q);
     return apiRequest<Card[]>(`/cards?${queryString.toString()}`);
   },
 
@@ -76,12 +77,13 @@ export const toolsApi = {
       body: JSON.stringify({ url, title, description }),
     }),
   
-  list: (params?: { skip?: number; limit?: number; tag?: string; sort_by?: string }) => {
+  list: (params?: { skip?: number; limit?: number; tag?: string; sort_by?: string; q?: string }) => {
     const queryString = new URLSearchParams();
     if (params?.skip) queryString.set('skip', String(params.skip));
     if (params?.limit) queryString.set('limit', String(params.limit));
     if (params?.tag) queryString.set('tag', params.tag);
     if (params?.sort_by) queryString.set('sort_by', params.sort_by);
+    if (params?.q) queryString.set('q', params.q);
     return apiRequest<Tool[]>(`/tools?${queryString.toString()}`);
   },
 

@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from app.db.models.models import Card
 from app.db.schemas.schemas import CardCreate, CardUpdate
 from app.providers.base import BaseAIProvider
+from app.services.search_utils import keyword_score
 from app.services.tag_service import get_candidate_tags, normalize_tags
 from app.tools.content_extractor import content_extractor, ExtractionResult
 
@@ -115,6 +116,7 @@ class CardService:
         limit: int = 20,
         tag: Optional[str] = None,
         days: Optional[int] = None,
+        q: Optional[str] = None,
     ) -> List[Card]:
         """
         获取卡片列表
@@ -124,6 +126,8 @@ class CardService:
             limit: 返回数量
             tag: 标签筛选
             days: 天数筛选（如 7 表示最近 7 天）
+            q: 关键词搜索（jieba 分词 + 加权匹配）。提供 q 时在内存打分过滤、
+               按 score 降序返回；无 q 时走 DB 层 offset/limit。
 
         Returns:
             卡片列表
@@ -144,6 +148,18 @@ class CardService:
         if days:
             cutoff_date = datetime.now() - timedelta(days=days)
             query = query.where(Card.created_at >= cutoff_date)
+
+        if q:
+            # 关键词搜索：全量取出（已应用 tag/days 筛选）后内存打分过滤排序
+            result = await self.db.execute(query)
+            cards = result.scalars().all()
+            scored = [
+                (c, keyword_score(q, c.title, c.ai_tags or [], c.ai_summary))
+                for c in cards
+            ]
+            scored = [(c, s) for c, s in scored if s > 0]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            return [c for c, _ in scored[skip : skip + limit]]
 
         query = query.offset(skip).limit(limit)
 

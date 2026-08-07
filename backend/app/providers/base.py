@@ -6,10 +6,12 @@ AI Provider 抽象层
 兼容性说明：
 - 使用 JSON mode（response_format=json_object）而非 OpenAI 结构化输出（json_schema），
   保证 DeepSeek / 通义千问 / Moonshot 等 OpenAI 兼容服务都能用
+- Embedding 由独立的 LocalEmbeddingProvider（bge-small-zh-v1.5 本地模型）负责，
+  零外部 API 依赖、永不停用。DeepSeek 仅负责摘要/标签生成，不负责向量。
 - Embedding 调用失败时优雅降级为 hash 向量，不阻断建卡流程
-  （DeepSeek 无 Embedding API，等 Phase 1 任务 6 接入独立 Embedding 服务）
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -45,6 +47,15 @@ def _hash_embedding(text: str, dim: int = 1536) -> List[float]:
 class BaseAIProvider(ABC):
     """AI Provider 基类"""
 
+    def __init__(self, embedding_provider=None):
+        """
+        Args:
+            embedding_provider: 可选的本地 Embedding Provider 实例（LocalEmbeddingProvider）。
+                                注入后 generate_embedding / embed_texts 会委托给它，
+                                避免依赖 LLM 供应商的 Embedding API（DeepSeek 不支持）。
+        """
+        self._embedding_provider = embedding_provider
+
     @abstractmethod
     async def generate_card(
         self, url: str, content: str, candidate_tags: Optional[List[str]] = None
@@ -66,19 +77,53 @@ class BaseAIProvider(ABC):
         """
         pass
 
-    @abstractmethod
-    async def generate_embedding(self, text: str) -> List[float]:
-        """生成向量"""
-        pass
+    async def generate_embedding(
+        self, text: str, is_query: bool = False
+    ) -> List[float]:
+        """生成单条文本的向量
 
-    async def safe_generate_embedding(self, text: str) -> List[float]:
+        Args:
+            text: 文本
+            is_query: 是否是搜索 query。bge 模型对 query 推荐加前缀以提升检索效果。
+                      文档建库时传 False，搜索时传 True。
+
+        默认实现：委托给注入的 embedding_provider（同步转异步）。
+        子类可覆盖以接入其他 Embedding 服务（如 OpenAI API）。
+        """
+        if self._embedding_provider is not None:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                lambda: self._embedding_provider.embed_text(text, is_query=is_query),
+            )
+        raise NotImplementedError("未配置 Embedding Provider")
+
+    async def embed_texts(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[List[float]]:
+        """批量生成向量（回填脚本用，加速存量数据）
+
+        默认实现：委托给 embedding_provider 的批量接口。
+        """
+        if self._embedding_provider is not None:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                lambda: self._embedding_provider.embed_texts(texts, is_query=is_query),
+            )
+        # 兜底：逐条生成
+        return [await self.generate_embedding(t, is_query=is_query) for t in texts]
+
+    async def safe_generate_embedding(
+        self, text: str, is_query: bool = False
+    ) -> List[float]:
         """安全的向量生成：失败时降级为 hash 向量，不抛异常。
 
         供 search_service 等需要容错的场景调用，避免 Embedding 服务不可用
-        （如 deepseek 无 Embedding API）导致接口 500。
+        导致接口 500。
         """
         try:
-            return await self.generate_embedding(text)
+            return await self.generate_embedding(text, is_query=is_query)
         except Exception as exc:
             logger.warning("Embedding 降级为 hash 向量：%s", exc)
             return _hash_embedding(text)
@@ -114,7 +159,9 @@ class RealAIProvider(BaseAIProvider):
         base_url: str = "",
         max_tokens: int = 500,
         temperature: float = 0.3,
+        embedding_provider=None,
     ):
+        super().__init__(embedding_provider=embedding_provider)
         client_kwargs = {"api_key": api_key}
         if base_url:
             client_kwargs["base_url"] = base_url
@@ -183,8 +230,24 @@ class RealAIProvider(BaseAIProvider):
             "embedding": embedding,
         }
 
-    async def generate_embedding(self, text: str) -> List[float]:
-        """调用 Embedding API（若服务商不支持则抛 RuntimeError）"""
+    async def generate_embedding(
+        self, text: str, is_query: bool = False
+    ) -> List[float]:
+        """生成向量：优先用本地 embedding_provider，否则走 OpenAI 兼容 API
+
+        Args:
+            text: 文本
+            is_query: 是否是搜索 query（仅对本地 bge 模型生效）
+        """
+        # 优先用本地 Embedding Provider（bge-small-zh-v1.5），零外部依赖、永不停用
+        if self._embedding_provider is not None:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                lambda: self._embedding_provider.embed_text(text, is_query=is_query),
+            )
+        # 兜底：走 OpenAI 兼容 API（DeepSeek 不支持 embeddings，会抛 RuntimeError，
+        # 由 safe_generate_embedding 降级为 hash 向量）
         try:
             resp = await self.client.embeddings.create(
                 model=self.embedding_model,
@@ -257,7 +320,9 @@ class DemoAIProvider(BaseAIProvider):
             "embedding": [0.1] * 1536,
         }
 
-    async def generate_embedding(self, text: str) -> List[float]:
+    async def generate_embedding(
+        self, text: str, is_query: bool = False
+    ) -> List[float]:
         """返回模拟向量"""
         return _hash_embedding(text)
 
@@ -280,6 +345,22 @@ class DemoAIProvider(BaseAIProvider):
             return {"type": "article", "tags": ["文章", "待学习"]}
 
 
+def _create_embedding_provider_from_settings():
+    """根据 settings 创建 Embedding Provider，未启用返回 None
+
+    - EMBEDDING_PROVIDER=local: 创建 LocalEmbeddingProvider（bge-small-zh-v1.5 单例）
+    - EMBEDDING_PROVIDER=openai: 返回 None，走 OpenAI 兼容 API（DeepSeek 不支持会降级）
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if settings.EMBEDDING_PROVIDER == "local":
+        from app.providers.local_embedding import get_local_embedding_provider
+
+        return get_local_embedding_provider(settings.EMBEDDING_LOCAL_MODEL)
+    return None
+
+
 def get_ai_provider(
     demo_mode: bool = True,
     api_key: str = "",
@@ -288,10 +369,21 @@ def get_ai_provider(
     embedding_model: str = "text-embedding-3-small",
     max_tokens: int = 500,
     temperature: float = 0.3,
+    embedding_provider=None,
 ) -> BaseAIProvider:
-    """获取 AI Provider 实例"""
+    """获取 AI Provider 实例
+
+    embedding_provider 未传入时，自动根据 settings.EMBEDDING_PROVIDER 创建：
+    - local: 注入 LocalEmbeddingProvider（bge-small-zh-v1.5，零外部依赖）
+    - openai: 不注入，走 OpenAI 兼容 API（DeepSeek 不支持，会降级 hash 向量）
+    """
     if demo_mode:
         return DemoAIProvider()
+
+    # 未显式传入 embedding_provider 时，根据 settings 自动创建
+    if embedding_provider is None:
+        embedding_provider = _create_embedding_provider_from_settings()
+
     return RealAIProvider(
         api_key=api_key,
         model=model,
@@ -299,4 +391,5 @@ def get_ai_provider(
         base_url=base_url,
         max_tokens=max_tokens,
         temperature=temperature,
+        embedding_provider=embedding_provider,
     )

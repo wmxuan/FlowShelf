@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { FileText, Tag, Calendar, Sparkles, ExternalLink, Trash2 } from 'lucide-react';
+import { FileText, Tag, Calendar, Sparkles, ExternalLink, Trash2, Search, X } from 'lucide-react';
 import { cardsApi } from '@/services/api';
 import type { Card, TagCount } from '@/types';
 import URLInput from '@/components/URLInput';
@@ -15,11 +15,19 @@ export default function CardsPage() {
   const [allTags, setAllTags] = useState<TagCount[]>([]);
   const [selectedCard, setSelectedCard] = useState<Card | null>(null);
   const [showAllTags, setShowAllTags] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');
 
-  const fetchCards = async (tag?: string) => {
+  const isSearching = searchQuery.trim().length > 0;
+
+  const fetchCards = async (tag?: string, q?: string) => {
     setIsLoading(true);
     try {
-      const data = await cardsApi.list({ limit: 50, tag: tag || undefined });
+      const data = await cardsApi.list({
+        limit: 50,
+        tag: q ? undefined : tag || undefined,
+        q: q || undefined,
+      });
       setCards(data);
     } catch (err) {
       console.error('获取卡片失败:', err);
@@ -37,9 +45,20 @@ export default function CardsPage() {
     }
   };
 
+  // 搜索优先：有搜索词走 q（忽略标签筛选），无搜索词走标签筛选
   useEffect(() => {
-    fetchCards(activeTag || undefined);
-  }, [activeTag]);
+    fetchCards(isSearching ? undefined : activeTag || undefined, isSearching ? searchQuery.trim() : undefined);
+  }, [activeTag, searchQuery]);
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSearchQuery(searchInput);
+  };
+
+  const clearSearch = () => {
+    setSearchInput('');
+    setSearchQuery('');
+  };
 
   useEffect(() => {
     fetchTags();
@@ -49,7 +68,10 @@ export default function CardsPage() {
     if (!confirm('确定删除这张卡片吗？')) return;
     try {
       await cardsApi.delete(id);
-      fetchCards(activeTag || undefined);
+      fetchCards(
+        isSearching ? undefined : activeTag || undefined,
+        isSearching ? searchQuery.trim() : undefined
+      );
       fetchTags();
     } catch (err) {
       console.error('删除失败:', err);
@@ -80,13 +102,56 @@ export default function CardsPage() {
       {/* URL 输入 */}
       <URLInput
         onCardCreated={() => {
-          fetchCards(activeTag || undefined);
+          fetchCards(
+            isSearching ? undefined : activeTag || undefined,
+            isSearching ? searchQuery.trim() : undefined
+          );
           fetchTags();
         }}
       />
 
-      {/* 标签筛选 */}
-      {allTags.length > 0 && (
+      {/* 搜索框 */}
+      <form onSubmit={handleSearchSubmit} className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="在卡片库中搜索（标题 / 标签 / 摘要）"
+            className="input pl-9 pr-9"
+          />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={clearSearch}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 hover:bg-muted transition-colors"
+              title="清除搜索"
+            >
+              <X className="h-4 w-4 text-muted-foreground" />
+            </button>
+          )}
+        </div>
+        <button type="submit" className="button button-primary" disabled={!searchInput.trim()}>
+          搜索
+        </button>
+      </form>
+
+      {/* 搜索状态提示 */}
+      {isSearching && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>
+            搜索「<span className="font-medium text-foreground">{searchQuery}</span>」
+            找到 {cards.length} 张卡片
+          </span>
+          <button onClick={clearSearch} className="badge badge-secondary hover:bg-muted">
+            清除搜索
+          </button>
+        </div>
+      )}
+
+      {/* 标签筛选（搜索时隐藏，搜索优先） */}
+      {allTags.length > 0 && !isSearching && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium text-muted-foreground flex items-center gap-1">
             <Tag className="h-4 w-4" />
@@ -136,11 +201,19 @@ export default function CardsPage() {
       ) : cards.length === 0 ? (
         <div className="card text-center py-12">
           <div className="mx-auto mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-            <FileText className="h-8 w-8 text-primary" />
+            {isSearching ? (
+              <Search className="h-8 w-8 text-primary" />
+            ) : (
+              <FileText className="h-8 w-8 text-primary" />
+            )}
           </div>
-          <h3 className="text-lg font-semibold mb-2">还没有卡片</h3>
+          <h3 className="text-lg font-semibold mb-2">
+            {isSearching ? '没有匹配的卡片' : '还没有卡片'}
+          </h3>
           <p className="text-muted-foreground mb-4">
-            输入一个 URL，让 AI 为你生成第一张知识卡片
+            {isSearching
+              ? '换个关键词试试，或清除搜索查看全部卡片'
+              : '输入一个 URL，让 AI 为你生成第一张知识卡片'}
           </p>
         </div>
       ) : (

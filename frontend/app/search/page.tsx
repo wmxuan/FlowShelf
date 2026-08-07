@@ -1,26 +1,40 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Search, Sparkles, ExternalLink, FileText, Wrench, Loader2 } from 'lucide-react';
 import { searchApi } from '@/services/api';
 import type { SearchResult } from '@/types';
 
 export default function SearchPage() {
-  const [query, setQuery] = useState('');
+  return (
+    <Suspense fallback={<div className="text-sm text-muted-foreground">加载中...</div>}>
+      <SearchContent />
+    </Suspense>
+  );
+}
+
+function SearchContent() {
+  const searchParams = useSearchParams();
+  const initialQ = searchParams.get('q') || '';
+
+  const [query, setQuery] = useState(initialQ);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [searchType, setSearchType] = useState<'all' | 'cards' | 'tools'>('all');
+  const autoRan = useRef(false);
 
-  const handleSearch = async () => {
-    if (!query.trim()) return;
+  const handleSearch = async (q?: string, type?: 'all' | 'cards' | 'tools') => {
+    const searchTerm = (q ?? query).trim();
+    if (!searchTerm) return;
 
     setIsLoading(true);
     setHasSearched(true);
 
     try {
-      const data = await searchApi.semantic(query, searchType, 20);
+      const data = await searchApi.semantic(searchTerm, type ?? searchType, 20);
       setResults(data.results);
       setTotal(data.total);
     } catch (err) {
@@ -30,6 +44,16 @@ export default function SearchPage() {
       setIsLoading(false);
     }
   };
+
+  // 从 Header 全局搜索跳转来时（URL 带 q），自动执行一次搜索
+  useEffect(() => {
+    if (autoRan.current) return;
+    if (initialQ.trim()) {
+      autoRan.current = true;
+      handleSearch(initialQ, 'all');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQ]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -69,7 +93,7 @@ export default function SearchPage() {
               disabled={isLoading}
             />
             <button
-              onClick={handleSearch}
+              onClick={() => handleSearch()}
               disabled={isLoading || !query.trim()}
               className="button button-primary"
             >

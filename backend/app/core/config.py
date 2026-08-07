@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     AI_MAX_TOKENS: int = 500
     AI_TEMPERATURE: float = 0.3
 
+    # Embedding Provider 配置
+    # - local: 本地 sentence-transformers（默认，零外部依赖，永不停用）
+    # - openai: 走 OPENAI_BASE_URL 的 embeddings API（DeepSeek 不支持，不推荐）
+    EMBEDDING_PROVIDER: str = "local"
+    EMBEDDING_LOCAL_MODEL: str = "BAAI/bge-small-zh-v1.5"  # 512 维，~95MB，CPU 可跑
+
     # 服务器
     HOST: str = "0.0.0.0"
     PORT: int = 8000
