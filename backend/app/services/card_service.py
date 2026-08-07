@@ -23,7 +23,12 @@ class CardService:
         self.db = db
         self.ai_provider = ai_provider
 
-    async def create_card(self, url: str, content: Optional[str] = None) -> Card:
+    async def create_card(
+        self,
+        url: str,
+        content: Optional[str] = None,
+        preview_data: Optional[dict] = None,
+    ) -> Card:
         """
         创建卡片（正文抽取 + AI 生成）
 
@@ -31,6 +36,9 @@ class CardService:
             url: 原文 URL
             content: 可选，已预先提供的正文（如 Bookmarklet 直接传入浏览器 DOM 文本）。
                      为 None 时自动从 URL 抓取抽取。
+            preview_data: 预览阶段生成、用户可能编辑过的卡片数据。传入则跳过正文抽取
+                         与 AI 生成，直接用编辑后的内容写库（embedding 用编辑后文本重新生成）。
+                         格式：{"title", "ai_summary", "key_points", "ai_tags"}
 
         Returns:
             Card 模型实例
@@ -38,6 +46,35 @@ class CardService:
         Raises:
             ValueError: 正文抽取失败时抛出，由路由层转为 HTTP 422
         """
+        # 查候选标签库（两条路径都需要做标签归一化）
+        candidates = await get_candidate_tags(self.db, "cards", top_n=30)
+
+        # 预览保存路径：跳过正文抽取与 AI 生成，保留用户编辑后的内容
+        if preview_data is not None:
+            title = preview_data["title"] or self._fallback_title(url)
+            summary = preview_data["ai_summary"]
+            key_points = preview_data["key_points"]
+            normalized_tags = normalize_tags(preview_data["ai_tags"], candidates)
+
+            # 用编辑后的文本重新生成 embedding，保证检索语义与最终内容一致
+            embed_text = "\n".join([title, summary, *key_points])
+            embedding = await self.ai_provider.safe_generate_embedding(embed_text)
+
+            new_card = Card(
+                source_url=url,
+                title=title,
+                ai_summary=summary,
+                key_points=key_points,
+                ai_tags=normalized_tags,
+                source_type="article",
+                embedding=embedding,
+                read_at=datetime.now(),
+            )
+            self.db.add(new_card)
+            await self.db.commit()
+            await self.db.refresh(new_card)
+            return new_card
+
         # Step 1: 正文抽取（content 已传入则跳过抓取）
         if content is None:
             extraction = await content_extractor.extract(url)
@@ -51,8 +88,7 @@ class CardService:
             content_text = content
             source_type = "article"
 
-        # Step 2: 查候选标签库 + AI 生成卡片内容（注入候选引导 AI 优先复用现有标签）
-        candidates = await get_candidate_tags(self.db, "cards", top_n=30)
+        # Step 2: AI 生成卡片内容（注入候选引导 AI 优先复用现有标签）
         card_data = await self.ai_provider.generate_card(
             url, content_text, candidate_tags=candidates
         )
@@ -81,21 +117,35 @@ class CardService:
 
         return new_card
 
-    async def generate_card_preview(self, url: str) -> dict:
+    async def generate_card_preview(
+        self, url: str, content: Optional[str] = None
+    ) -> dict:
         """
         仅预览 AI 生成结果，不写库。
+
+        Args:
+            url: 原文 URL
+            content: 可选，扩展端预提取的正文。传入则跳过 content_extractor，
+                     规避反爬 / 重定向循环。
 
         Returns:
             {"summary", "key_points", "tags"} 或在抽取失败时抛 ValueError
         """
-        extraction = await content_extractor.extract(url)
-        if not extraction.success:
-            raise ValueError(extraction.error or "正文抽取失败")
+        if content:
+            content_text = content
+            extracted_title = None
+        else:
+            extraction = await content_extractor.extract(url)
+            if not extraction.success:
+                raise ValueError(extraction.error or "正文抽取失败")
+            content_text = extraction.content
+            extracted_title = extraction.title
         candidates = await get_candidate_tags(self.db, "cards", top_n=30)
         result = await self.ai_provider.generate_card(
-            url, extraction.content, candidate_tags=candidates
+            url, content_text, candidate_tags=candidates
         )
         return {
+            "title": result.get("title") or extracted_title or self._fallback_title(url),
             "summary": result["summary"],
             "key_points": result["key_points"],
             "tags": normalize_tags(result["tags"], candidates),

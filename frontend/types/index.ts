@@ -14,6 +14,7 @@ export interface Card {
 }
 
 export interface CardGenerationResponse {
+  title: string;
   summary: string;
   key_points: string[];
   tags: string[];

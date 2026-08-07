@@ -31,11 +31,28 @@ export async function apiRequest<T>(
 
 // 卡片 API
 export const cardsApi = {
-  create: (url: string) =>
-    apiRequest<Card>('/cards', {
+  create: (
+    url: string,
+    preview?: {
+      title: string;
+      summary: string;
+      key_points: string[];
+      tags: string[];
+    }
+  ) => {
+    const body: Record<string, unknown> = { source_url: url };
+    if (preview) {
+      // 携带预览数据走「预览保存」路径，跳过 AI 生成，保留用户编辑后的内容
+      body.title = preview.title;
+      body.ai_summary = preview.summary;
+      body.key_points = preview.key_points;
+      body.ai_tags = preview.tags;
+    }
+    return apiRequest<Card>('/cards', {
       method: 'POST',
-      body: JSON.stringify({ source_url: url }),
-    }),
+      body: JSON.stringify(body),
+    });
+  },
   
   list: (params?: { skip?: number; limit?: number; tag?: string; days?: number; q?: string }) => {
     const queryString = new URLSearchParams();
@@ -71,10 +88,10 @@ export const cardsApi = {
 
 // 工具箱 API
 export const toolsApi = {
-  create: (url: string, title: string, description?: string) =>
+  create: (url: string, title: string, description?: string, aiTags?: string[]) =>
     apiRequest<Tool>('/tools', {
       method: 'POST',
-      body: JSON.stringify({ url, title, description }),
+      body: JSON.stringify({ url, title, description, ai_tags: aiTags }),
     }),
   
   list: (params?: { skip?: number; limit?: number; tag?: string; sort_by?: string; q?: string }) => {
@@ -106,6 +123,15 @@ export const toolsApi = {
     apiRequest(`/tools/${id}/visit`, {
       method: 'POST',
     }),
+
+  generate: (url: string) =>
+    apiRequest<{ title: string; description: string; tags: string[] }>(
+      '/tools/generate',
+      {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+      }
+    ),
 };
 
 // 搜索 API

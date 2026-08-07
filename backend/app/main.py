@@ -1,6 +1,7 @@
 """
 FastAPI 主入口
 """
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -10,6 +11,7 @@ from app.core.database import init_db
 from app.api.routes.cards import router as cards_router
 from app.api.routes.tools import router as tools_router
 from app.api.routes.search import router as search_router
+from app.api.routes.classify import router as classify_router
 
 
 @asynccontextmanager
@@ -24,7 +26,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """创建 FastAPI 应用"""
     settings = get_settings()
-    
+
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
@@ -39,21 +41,24 @@ def create_app() -> FastAPI:
         """,
         lifespan=lifespan,
     )
-    
-    # CORS 配置
+
+    # CORS 配置：allow_origins 覆盖 Web 应用来源，allow_origin_regex 覆盖扩展来源
+    # （扩展 ID 在开发期不稳定，用正则匹配 chrome-extension://<任意ID>）
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
+        allow_origin_regex=r"chrome-extension://.*",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+
     # 注册路由
     app.include_router(cards_router)
     app.include_router(tools_router)
     app.include_router(search_router)
-    
+    app.include_router(classify_router)
+
     @app.get("/api/health")
     async def health_check():
         """健康检查"""
@@ -63,7 +68,7 @@ def create_app() -> FastAPI:
             "version": settings.APP_VERSION,
             "demo_mode": settings.DEMO_MODE,
         }
-    
+
     return app
 
 
@@ -72,6 +77,7 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
+
     settings = get_settings()
     uvicorn.run(
         "app.main:app",

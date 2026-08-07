@@ -1,0 +1,214 @@
+{
+  "label": "v1.0",
+  "results": [
+    {
+      "label": "技术教程",
+      "url": "https://fastapi.tiangolo.com/tutorial/first-steps/",
+      "extracted_title": "First Steps - FastAPI",
+      "content_chars": 11870,
+      "title": "FastAPI 入门：从零构建你的第一个 API",
+      "summary": "文章主张 FastAPI 是构建 API 的现代高效框架，其核心优势在于自动生成交互式文档和 OpenAPI 模式，并支持异步、类型提示等特性。通过一个简单的示例，展示了从创建应用、定义路径操作到运行开发服务器的完整流程，并强调了配置入口点的重要性，以及可选的云部署能力。",
+      "summary_chars": 136,
+      "key_points": [
+        "FastAPI 基于 Starlette，提供全部功能并支持异步。",
+        "路径操作装饰器（如 @app.get）将函数绑定到 URL 和 HTTP 方法。",
+        "FastAPI 自动生成 OpenAPI 模式，驱动 Swagger UI 和 ReDoc 文档。",
+        "推荐在 pyproject.toml 中配置入口点，便于工具识别。",
+        "可通过 fastapi deploy 一键部署到 FastAPI Cloud。"
+      ],
+      "key_points_count": 5,
+      "tags_raw": [
+        "API",
+        "技术",
+        "最佳实践",
+        "架构"
+      ],
+      "tags_normalized": [
+        "API",
+        "技术",
+        "最佳实践",
+        "架构"
+      ],
+      "tokens": {
+        "prompt": 3696,
+        "completion": 222,
+        "total": 3918
+      },
+      "cost_usd": 0.00058,
+      "latency_ms": {
+        "extract": 600.5,
+        "llm": 4707.2,
+        "total": 5308.5
+      },
+      "parse_ok": true,
+      "parse_error": null
+    },
+    {
+      "label": "博客周刊",
+      "url": "https://www.ruanyifeng.com/blog/2024/01/weekly-issue-288.html",
+      "extracted_title": "科技爱好者周刊（第 288 期）：技术写作的首要诀窍 - 阮一峰的网络日志",
+      "content_chars": 5359,
+      "title": "技术写作的首要诀窍：单线结构",
+      "summary": "文章指出技术写作的核心在于清晰表达，而非文采，首要诀窍是采用单线结构，即一篇文章只讲一件事，线性推进。这种结构能确保读者理解顺畅，即使内容复杂也能定位难点。作者强调，将混乱思维整理为单线结构需要反复提炼，但这是提升技术文章质量的关键。",
+      "summary_chars": 117,
+      "key_points": [
+        "技术写作的评价标准是表达清楚，而非艺术性。",
+        "单线结构是技术写作的首要诀窍，一篇文章只讲一件事。",
+        "单线结构能帮助读者定位理解难点，避免迷失。",
+        "复杂问题应拆分为多篇单线结构的文章，每篇讲透一点。",
+        "将非线性思维整理为单线表达是写作的主要难点。"
+      ],
+      "key_points_count": 5,
+      "tags_raw": [
+        "技术",
+        "最佳实践"
+      ],
+      "tags_normalized": [
+        "技术",
+        "最佳实践"
+      ],
+      "tokens": {
+        "prompt": 3470,
+        "completion": 186,
+        "total": 3656
+      },
+      "cost_usd": 0.000538,
+      "latency_ms": {
+        "extract": 498.7,
+        "llm": 3699.1,
+        "total": 4198.5
+      },
+      "parse_ok": true,
+      "parse_error": null
+    },
+    {
+      "label": "RAG教程",
+      "url": "https://datawhalechina.github.io/easy-vibe/zh-cn/stage-3/ai-advanced/rag-introduction/",
+      "extracted_title": "本节课你将学到 | Easy-Vibe 教程",
+      "content_chars": 48141,
+      "title": "RAG技术综述：从原理到企业级实践",
+      "summary": "本文系统阐述检索增强生成（RAG）技术，主张RAG是解决大模型知识滞后、幻觉与成本问题的关键方案，其核心论据在于通过外部知识检索与生成结合，实现低成本、高准确、可追溯的企业级知识应用。文章从RAG的诞生背景、工作原理、技术演进（Naive至Modular RAG）出发，深入探讨模型选型、系统构建、效果评测及前沿趋势，为构建可信AI应用提供全链路方法论。",
+      "summary_chars": 177,
+      "key_points": [
+        "RAG通过先检索后生成，解决长上下文成本高、注意力分散与知识更新难的问题。",
+        "RAG技术演进分为Naive、Advanced与Modular三代，逐步实现精细化与模块化。",
+        "企业级RAG需关注Embedding、Rerank与LLM三类模型选型及系统化评测。",
+        "RAG正与图结构、多模态、智能体等融合，向更深层语义与自主决策演进。"
+      ],
+      "key_points_count": 4,
+      "tags_raw": [
+        "RAG",
+        "大模型",
+        "技术综述",
+        "企业应用",
+        "知识库"
+      ],
+      "tags_normalized": [
+        "RAG",
+        "大模型",
+        "技术综述",
+        "企业应用",
+        "知识库"
+      ],
+      "tokens": {
+        "prompt": 25065,
+        "completion": 251,
+        "total": 25316
+      },
+      "cost_usd": 0.003579,
+      "latency_ms": {
+        "extract": 837.9,
+        "llm": 4998.6,
+        "total": 5837.4
+      },
+      "parse_ok": true,
+      "parse_error": null
+    },
+    {
+      "label": "掘金文章",
+      "url": "https://juejin.cn/post/6844903938093744135",
+      "extracted_title": "精读《React Hooks 最佳实践》React 16.8 于 2019.2 正式发布，这是一个能提升代码质量和开发效 - 掘金",
+      "content_chars": 5851,
+      "title": "React Hooks 最佳实践精读",
+      "summary": "文章主张 React Hooks 的最佳实践应围绕稳定性与性能优化展开，核心是使用 useMemo 和 useCallback 确保引用稳定，避免不必要的重渲染。关键论据包括：useMemo 能处理 useContext 导致的按需渲染，而 useCallback 配合 ESLint 插件可保证函数引用正确，从而规避 useEffect 死循环等隐患。",
+      "summary_chars": 177,
+      "key_points": [
+        "使用 useMemo 而非 React.memo 以处理 useContext 场景下的按需渲染。",
+        "所有函数必须用 useCallback 包裹，并依赖 ESLint 插件自动填充依赖项。",
+        "局部状态优先使用 useState，useRef 仅用于不需重复初始化的对象。",
+        "组件间频繁通信使用 useContext 结合 useReducer，避免状态复杂化。",
+        "debounce 应作用于渲染最慢的组件入参，而非源头 onChange。"
+      ],
+      "key_points_count": 5,
+      "tags_raw": [
+        "React",
+        "Hooks",
+        "最佳实践",
+        "性能优化",
+        "状态管理"
+      ],
+      "tags_normalized": [
+        "React",
+        "Hooks",
+        "最佳实践",
+        "性能优化",
+        "状态管理"
+      ],
+      "tokens": {
+        "prompt": 2734,
+        "completion": 220,
+        "total": 2954
+      },
+      "cost_usd": 0.000444,
+      "latency_ms": {
+        "extract": 444.6,
+        "llm": 3159.4,
+        "total": 3605.2
+      },
+      "parse_ok": true,
+      "parse_error": null
+    },
+    {
+      "label": "API文档",
+      "url": "https://docs.bigmodel.cn/cn/guide/start/concept-param",
+      "extracted_title": "核心参数 - 智谱AI开放文档",
+      "content_chars": 1791,
+      "title": "智谱AI大模型API参数配置指南",
+      "summary": "文章主张合理配置采样参数（do_sample、temperature、top_p）是平衡输出确定性与多样性的关键，并强调max_tokens控制成本、stream提升交互体验、thinking与reasoning_effort适配推理需求。核心论据是不同参数组合适用于不同场景，需按需选择。",
+      "summary_chars": 145,
+      "key_points": [
+        "采样参数决定输出确定性与多样性，需按场景选择。",
+        "temperature与top_p建议只调整其一，避免叠加影响。",
+        "max_tokens限制生成长度，控制成本。",
+        "stream模式显著提升实时交互体验。",
+        "thinking与reasoning_effort支持复杂推理，简单任务可关闭。"
+      ],
+      "key_points_count": 5,
+      "tags_raw": [
+        "大模型",
+        "API",
+        "最佳实践",
+        "技术"
+      ],
+      "tags_normalized": [
+        "大模型",
+        "API",
+        "最佳实践",
+        "技术"
+      ],
+      "tokens": {
+        "prompt": 1521,
+        "completion": 176,
+        "total": 1697
+      },
+      "cost_usd": 0.000262,
+      "latency_ms": {
+        "extract": 1269.0,
+        "llm": 2892.1,
+        "total": 4161.7
+      },
+      "parse_ok": true,
+      "parse_error": null
+    }
+  ]
+}

@@ -22,9 +22,31 @@ class CardBase(BaseModel):
 
 
 class CardCreate(BaseModel):
-    """创建卡片请求"""
+    """创建卡片请求
+
+    传 source_url 单字段时走「正文抽取 + AI 生成」完整链路；
+    附带 title/ai_summary/key_points/ai_tags 时走「预览保存」路径，
+    跳过 AI 生成，保留用户在预览阶段编辑后的内容。
+    """
 
     source_url: str = Field(..., description="原文 URL")
+    title: Optional[str] = Field(
+        default=None, description="预览阶段已生成的标题（用户可编辑）"
+    )
+    ai_summary: Optional[str] = Field(
+        default=None, description="预览阶段已生成的摘要（用户可编辑）"
+    )
+    key_points: Optional[List[str]] = Field(
+        default=None, description="预览阶段已生成的关键观点（用户可编辑）"
+    )
+    ai_tags: Optional[List[str]] = Field(
+        default=None, description="预览阶段已生成的标签（用户可编辑）"
+    )
+    content: Optional[str] = Field(
+        default=None,
+        description="扩展端预先提取的页面正文（document.body.innerText）。"
+        "传入则跳过后端 content_extractor，规避反爬/重定向循环。",
+    )
 
 
 class CardResponse(CardBase):
@@ -43,6 +65,7 @@ class CardResponse(CardBase):
 class CardUpdate(BaseModel):
     """更新卡片请求"""
 
+    title: Optional[str] = None
     ai_summary: Optional[str] = None
     key_points: Optional[List[str]] = None
     ai_tags: Optional[List[str]] = None
@@ -70,6 +93,15 @@ class ToolCreate(ToolBase):
     """创建工具请求"""
 
     description: Optional[str] = None
+    ai_tags: Optional[List[str]] = Field(
+        default=None,
+        description="预生成的标签（来自 generate 预览）。传入则跳过 AI 分类直接复用",
+    )
+    content: Optional[str] = Field(
+        default=None,
+        description="扩展端预先提取的页面正文（document.body.innerText）。"
+        "传入则跳过后端 content_extractor，规避反爬/重定向循环。",
+    )
 
 
 class ToolResponse(ToolBase):
@@ -133,13 +165,36 @@ class CardGenerationRequest(BaseModel):
     """卡片生成请求"""
 
     url: str = Field(..., description="要分析的 URL")
+    content: Optional[str] = Field(
+        default=None,
+        description="扩展端预先提取的页面正文。传入则跳过后端 content_extractor。",
+    )
 
 
 class CardGenerationResponse(BaseModel):
     """卡片生成响应"""
 
+    title: str = Field(description="AI 生成的标题")
     summary: str = Field(description="AI 生成的摘要")
     key_points: List[str] = Field(description="关键观点")
+    tags: List[str] = Field(description="AI 生成的标签")
+
+
+class ToolGenerationRequest(BaseModel):
+    """工具生成请求"""
+
+    url: str = Field(..., description="要分析的 URL")
+    content: Optional[str] = Field(
+        default=None,
+        description="扩展端预先提取的页面正文。传入则跳过后端 content_extractor。",
+    )
+
+
+class ToolGenerationResponse(BaseModel):
+    """工具生成响应"""
+
+    title: str = Field(description="AI 生成的工具名称")
+    description: str = Field(default="", description="AI 生成的工具描述")
     tags: List[str] = Field(description="AI 生成的标签")
 
 
@@ -158,3 +213,27 @@ class ErrorResponse(BaseModel):
 
     detail: str
     error_code: Optional[str] = None
+
+
+# ============ 智能分流相关 ============
+
+
+class ClassifyRequest(BaseModel):
+    """智能分流请求"""
+
+    url: str = Field(..., description="要分类的 URL")
+    title: Optional[str] = Field(
+        default=None, description="页面标题（扩展端可传入，辅助分类）"
+    )
+    content: Optional[str] = Field(
+        default=None,
+        description="扩展端预先提取的页面正文。传入则跳过后端 content_extractor。",
+    )
+
+
+class ClassifyResponse(BaseModel):
+    """智能分流响应"""
+
+    type: str = Field(..., description="类型：article | tool | video")
+    tags: List[str] = Field(default_factory=list, description="AI 生成的标签")
+    title: Optional[str] = Field(None, description="抽取到的页面标题")

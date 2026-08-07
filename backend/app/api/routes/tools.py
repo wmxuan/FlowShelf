@@ -14,6 +14,8 @@ from app.db.schemas.schemas import (
     ToolCreate,
     ToolUpdate,
     ToolResponse,
+    ToolGenerationRequest,
+    ToolGenerationResponse,
     MessageResponse,
     TagCount,
 )
@@ -40,7 +42,11 @@ async def create_tool(
     service = ToolService(db, ai_provider)
 
     tool = await service.create_tool(
-        url=request.url, title=request.title, description=request.description
+        url=request.url,
+        title=request.title,
+        description=request.description,
+        ai_tags=request.ai_tags,
+        content=request.content,
     )
 
     return tool
@@ -52,7 +58,9 @@ async def list_tools(
     limit: int = Query(20, ge=1, le=100),
     tag: Optional[str] = None,
     sort_by: str = Query("created_at", description="排序方式"),
-    q: Optional[str] = Query(None, description="关键词搜索（提供时忽略 sort_by，按相关度排序）"),
+    q: Optional[str] = Query(
+        None, description="关键词搜索（提供时忽略 sort_by，按相关度排序）"
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """获取工具列表（支持关键词搜索 + 标签组合筛选）"""
@@ -96,6 +104,45 @@ async def list_tags(
     )
     service = ToolService(db, ai_provider)
     return await service.get_tags_with_count()
+
+
+@router.post("/generate", response_model=ToolGenerationResponse)
+async def generate_tool(
+    request: ToolGenerationRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    生成工具信息（仅返回 AI 结果，不保存）
+
+    AI 分析 URL 抓取的正文，生成工具名称、描述与标签，供前端预览。
+    保存时把结果中的 title/tags 一并传给 POST /tools，跳过重复 AI 分类。
+    """
+    settings = get_settings()
+    ai_provider = get_ai_provider(
+        demo_mode=settings.DEMO_MODE,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+        model=settings.AI_MODEL,
+        embedding_model=settings.EMBEDDING_MODEL,
+        max_tokens=settings.AI_MAX_TOKENS,
+        temperature=settings.AI_TEMPERATURE,
+    )
+    service = ToolService(db, ai_provider)
+
+    try:
+        result = await service.generate_tool_preview(
+            request.url, content=request.content
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"工具信息生成失败：{exc.__class__.__name__}"
+        )
+
+    return ToolGenerationResponse(
+        title=result["title"],
+        description=result["description"],
+        tags=result["tags"],
+    )
 
 
 @router.get("/{tool_id}", response_model=ToolResponse)
