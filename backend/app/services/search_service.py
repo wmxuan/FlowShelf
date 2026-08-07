@@ -1,25 +1,38 @@
 """
 语义搜索服务层
 
-当前环境（deepseek）无 Embedding API，_hash_embedding 生成的伪向量无语义，
-余弦相似度为随机值。因此采用 jieba 分词 + 关键词加权匹配作为检索方案。
-待接入独立 Embedding 服务后，可切回向量检索或混合检索（_cosine_similarity 已保留）。
+混合检索策略（向量 + 关键词）：
+- 优先用向量余弦相似度（语义匹配，解决「UI」搜不到「蓝湖」的语义鸿沟）
+- 混合关键词分数（精确匹配兜底，避免向量检索漏掉实体名/编号）
+- 无 embedding 或维度不匹配的老数据降级为纯关键词
+
+权重：向量 × 0.7 + 关键词 × 0.3
+阈值：向量分数 ≥ 0.3 或关键词匹配，才进入结果集
 """
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import List, Tuple
+import logging
 import math
+from typing import List, Optional, Tuple
 
-import jieba
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.models import Card, Tool
 from app.db.schemas.schemas import SearchResult
 from app.providers.base import BaseAIProvider
+from app.services.search_utils import keyword_score
+
+logger = logging.getLogger(__name__)
 
 
 class SearchService:
     """语义搜索服务"""
+
+    # 混合检索权重
+    VECTOR_WEIGHT = 0.7
+    KEYWORD_WEIGHT = 0.3
+    # 向量最低阈值：低于此值且关键词也无匹配时不返回，避免噪声
+    MIN_VEC_THRESHOLD = 0.3
 
     def __init__(self, db: AsyncSession, ai_provider: BaseAIProvider):
         self.db = db
@@ -32,7 +45,7 @@ class SearchService:
         limit: int = 20,
     ) -> Tuple[List[SearchResult], int]:
         """
-        搜索（jieba 分词 + 关键词加权匹配）
+        混合检索（向量 + 关键词）
 
         Args:
             query: 搜索查询
@@ -40,16 +53,20 @@ class SearchService:
             limit: 返回数量
 
         Returns:
-            (搜索结果列表, 总数)，无关键词匹配的结果不返回
+            (搜索结果列表, 总数)，无匹配的结果不返回
         """
         results = []
 
-        # 搜索卡片
+        # 1. 生成 query embedding（用于向量检索；失败降级为纯关键词）
+        query_embedding = await self._get_query_embedding(query)
+
+        # 2. 搜索卡片
         if search_type in ("all", "cards"):
-            cards = await self._get_all_cards_with_embedding()
+            cards = await self._get_all_cards()
             for card in cards:
-                score = self._keyword_score(
-                    query, card.title, card.ai_tags or [], card.ai_summary
+                score = self._compute_hybrid_score(
+                    query, query_embedding, card.embedding,
+                    card.title, card.ai_tags or [], card.ai_summary,
                 )
                 if score > 0:
                     results.append(
@@ -64,12 +81,13 @@ class SearchService:
                         )
                     )
 
-        # 搜索工具箱
+        # 3. 搜索工具箱
         if search_type in ("all", "tools"):
             tools = await self._get_all_tools()
             for tool in tools:
-                score = self._keyword_score(
-                    query, tool.title, tool.ai_tags or [], tool.description or ""
+                score = self._compute_hybrid_score(
+                    query, query_embedding, tool.embedding,
+                    tool.title, tool.ai_tags or [], tool.description or "",
                 )
                 if score > 0:
                     results.append(
@@ -84,7 +102,7 @@ class SearchService:
                         )
                     )
 
-        # 按相关度排序
+        # 4. 按相关度排序
         results.sort(key=lambda x: x.score, reverse=True)
 
         total = len(results)
@@ -92,9 +110,60 @@ class SearchService:
 
         return results, total
 
-    async def _get_all_cards_with_embedding(self) -> List[Card]:
-        """获取所有有 embedding 的卡片"""
-        query = select(Card).where(Card.embedding.isnot(None))
+    async def _get_query_embedding(self, query: str) -> Optional[List[float]]:
+        """生成 query 的向量（is_query=True，bge 推荐加前缀）
+
+        失败返回 None，降级为纯关键词搜索。
+        """
+        try:
+            return await self.ai_provider.generate_embedding(query, is_query=True)
+        except Exception as exc:
+            logger.warning("Query embedding 生成失败，降级为纯关键词搜索：%s", exc)
+            return None
+
+    def _compute_hybrid_score(
+        self,
+        query: str,
+        query_embedding: Optional[List[float]],
+        doc_embedding: Optional[List[float]],
+        title: str,
+        tags: List[str],
+        summary: str,
+    ) -> float:
+        """计算混合分数：向量相似度 × 0.7 + 关键词分数 × 0.3
+
+        - 有向量且维度匹配：加权混合
+        - 无向量或维度不匹配：降级为纯关键词分数
+
+        返回 0 表示不进入结果集。
+        """
+        kw_score = keyword_score(query, title, tags, summary)
+
+        # 向量相似度
+        vec_score = 0.0
+        has_vec = False
+        if query_embedding is not None and doc_embedding:
+            # 维度匹配才用向量（避免老 1536 维 hash 向量与新 512 维 query 误用）
+            if len(query_embedding) == len(doc_embedding):
+                sim = self._cosine_similarity(query_embedding, doc_embedding)
+                # bge 归一化后余弦相似度在 [-1, 1]，截断到 [0, 1]
+                vec_score = max(0.0, sim)
+                has_vec = True
+
+        if has_vec:
+            # 混合分数
+            hybrid = vec_score * self.VECTOR_WEIGHT + kw_score * self.KEYWORD_WEIGHT
+            # 向量分数 ≥ 阈值 或 关键词匹配，才返回
+            if vec_score >= self.MIN_VEC_THRESHOLD or kw_score > 0:
+                return hybrid
+            return 0.0
+        else:
+            # 无向量：纯关键词，kw_score=0 不返回
+            return kw_score
+
+    async def _get_all_cards(self) -> List[Card]:
+        """获取所有卡片（含无 embedding 的，降级关键词搜索）"""
+        query = select(Card)
         result = await self.db.execute(query)
         return result.scalars().all()
 
@@ -105,57 +174,17 @@ class SearchService:
         return result.scalars().all()
 
     @staticmethod
-    def _extract_terms(query: str) -> List[str]:
-        """用 jieba 分词提取检索词，英文转小写"""
-        terms = [w.strip() for w in jieba.cut(query) if w.strip()]
-        return [t.lower() if t.isascii() else t for t in terms]
-
-    @staticmethod
-    def _keyword_score(query: str, title: str, tags: List[str], summary: str) -> float:
-        """关键词匹配打分（0-1），无匹配返回 0。
-
-        权重：标题 = 标签 > 摘要（标签是 AI 精心打的，语义价值高）。
-        综合覆盖率（匹配词比例）与匹配位置权重。
-        """
-        terms = SearchService._extract_terms(query)
-        if not terms:
-            return 0.0
-
-        title_l = (title or "").lower()
-        tags_l = " ".join(tags or []).lower()
-        summary_l = (summary or "").lower()
-
-        matched = 0
-        weight_sum = 0.0
-        for term in terms:
-            if term in title_l:
-                matched += 1
-                weight_sum += 3.0
-            elif term in tags_l:
-                matched += 1
-                weight_sum += 3.0
-            elif term in summary_l:
-                matched += 1
-                weight_sum += 1.0
-
-        if matched == 0:
-            return 0.0
-
-        coverage = matched / len(terms)
-        avg_weight = weight_sum / (matched * 3.0)
-        return coverage * 0.6 + avg_weight * 0.4
-
-    @staticmethod
     def _cosine_similarity(v1: List[float], v2: List[float]) -> float:
-        """
-        计算余弦相似度
+        """计算余弦相似度
+
+        bge 归一化后的向量，余弦相似度 = 点积，但这里保留完整计算以兼容未归一化的向量。
 
         Args:
             v1: 向量 1
             v2: 向量 2
 
         Returns:
-            相似度分数（0-1）
+            相似度分数（-1 ~ 1）
         """
         if len(v1) != len(v2):
             # 长度不同，截断到较短的长度
@@ -174,5 +203,4 @@ class SearchService:
         if magnitude_v1 == 0 or magnitude_v2 == 0:
             return 0.0
 
-        # 计算余弦相似度
         return dot_product / (magnitude_v1 * magnitude_v2)

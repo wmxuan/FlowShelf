@@ -11,6 +11,7 @@ from typing import List, Optional
 from app.db.models.models import Tool
 from app.db.schemas.schemas import ToolCreate, ToolUpdate
 from app.providers.base import BaseAIProvider
+from app.services.search_utils import keyword_score
 from app.services.tag_service import get_candidate_tags, normalize_tags
 from app.tools.content_extractor import content_extractor
 
@@ -61,12 +62,17 @@ class ToolService:
         # Step 2.5: 标签归一化（相似度去重，归并到已有标签，抑制同义标签膨胀）
         normalized_tags = normalize_tags(classify_result["tags"], candidates)
 
+        # Step 2.6: 生成 embedding（用于语义检索；失败降级为 hash 向量，不阻断收藏）
+        embed_text = " ".join([title, *normalized_tags, description or ""])
+        embedding = await self.ai_provider.safe_generate_embedding(embed_text)
+
         # Step 3: 创建数据库记录
         new_tool = Tool(
             url=url,
             title=title,
             ai_tags=normalized_tags,
             description=description,
+            embedding=embedding,
         )
 
         self.db.add(new_tool)
@@ -81,6 +87,7 @@ class ToolService:
         limit: int = 20,
         tag: Optional[str] = None,
         sort_by: str = "created_at",  # created_at | visit_count | last_visited_at
+        q: Optional[str] = None,
     ) -> List[Tool]:
         """
         获取工具列表
@@ -90,6 +97,8 @@ class ToolService:
             limit: 返回数量
             tag: 标签筛选
             sort_by: 排序方式
+            q: 关键词搜索（jieba 分词 + 加权匹配）。提供 q 时在内存打分过滤、
+               按 score 降序返回，忽略 sort_by；无 q 时走 DB 层排序 + offset/limit。
 
         Returns:
             工具列表
@@ -107,6 +116,18 @@ class ToolService:
                     "EXISTS (SELECT 1 FROM json_each(tools.ai_tags) WHERE value = :tag)"
                 ).bindparams(tag=tag)
             )
+
+        if q:
+            # 关键词搜索：全量取出（已应用 tag 筛选）后内存打分过滤排序
+            result = await self.db.execute(query)
+            tools = result.scalars().all()
+            scored = [
+                (t, keyword_score(q, t.title, t.ai_tags or [], t.description or ""))
+                for t in tools
+            ]
+            scored = [(t, s) for t, s in scored if s > 0]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            return [t for t, _ in scored[skip : skip + limit]]
 
         # 排序
         if sort_by == "visit_count":

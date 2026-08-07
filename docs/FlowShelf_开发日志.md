@@ -183,6 +183,81 @@
 - **影响范围**：`tools.py` 全部路由、`search.py` 语义检索
 - **教训**：路由层 provider 初始化应统一抽取为 FastAPI 依赖注入，避免复制粘贴遗漏参数。此类 bug 隐蔽——接口返回 200 但数据为空，易误判为 AI 质量问题
 
+### [2026-08-06] 真语义搜索落地：jieba 关键词匹配无法跨越语义鸿沟
+
+- **决策类型**：踩坑记录 / 技术选型
+- **问题描述**：搜「UI」搜不到「蓝湖」（tags=["设计协作","产品设计","团队协作"]）。`search_service` 注释自述"deepseek 无 Embedding API，降级为关键词匹配"，实际 `search_utils.keyword_score` 是 jieba 分词 + 子串匹配，"ui" 在 title/tags/description 任何字段都无子串重叠，必然 0 分。这类查询属于"语义相关但字面无关"（同义词 / 上下位词 / 缩写，是关键词方案的结构性盲区
+- **根因**：DeepSeek 官方 API 不支持 embeddings 接口；之前用 `_hash_embedding` 降级生成的 1536 维假向量（用 MD5 字节归一化），存在 Card.embedding 字段但从未真正用于检索。真正的语义检索
+- **决策过程（竞品分析 + 方案对比 + 多轮决策）**：
+
+  问题一：搜索架构——「语义鸿沟的行业标准实现是「召回层（Recall） + 重排层（Re-rank） + 生成层（Generate）」三层流水线（Notion AI / Cubox / RAGFlow 等 2024-2025 行业共识架构）。针对 FlowShelf，拆解为三阶段：
+
+  | 层                                          | 作用                                  | Notion AI Q&A 怎么做                         | Cubox / 飞书多维表格怎么做 | FlowShelf MVP 要不要做                    |
+  | ------------------------------------------- | ------------------------------------- | -------------------------------------------- | -------------------------- | ----------------------------------------- |
+  | **召回层**：向量检索（Bi-Encoder，bge/GTE） | 粗筛，别漏掉正确结果                  | ✅ bi-encoder + turbopuffer 向量库           | ✅ bge 系列，余弦          | ✅ **必做（本次做**                       |
+  | **召回层**：关键词检索（BM25/jieba）        | 兜底实体/编号精确匹配                 | ✅ + BM25，用 RRF 与向量融合                 | ✅ jieba + BM25 混合       | ✅ **必做（保留 jieba，混合权重 0.3）**   |
+  | **重排层**：Cross-Encoder（bge-reranker）   | 精排，把最相关顶到前面                | ✅ Cross-Encoder 重排 Top-50                 | ⏸️ 收藏量级小，少用        | ⏸️ **MVP 暂不做**（千级数据纯召回已干净） |
+  | **重排层**：LLM 重排（Chat API 筛选 ID）    | 用户最初方案：把 Top-N 再喂 LLM 挑 ID | ❌ 不推荐（Chat 做重排贵且慢 10×，稳定性差） | ❌ 不用                    | ❌ **否决（否决原因见下）**               |
+  | **生成层**：LLM 生成答案（RAG）             | 用户要答案而非文档列表                | ✅ 生成自然语言回答                          | ❌ 纯搜索不用              | ⏸️ 周报/知识助理里做，纯搜索跳过          |
+
+  问题二：Embedding 方案选型（4 方案 RICE 打分，R=Reliability 可靠性 / I=Inference Cost 推理成本 / C=Cost 维护成本 / E=Effectiveness 效果 / E=Engineering 工程复杂度）：
+
+  | 方案                          | 说明                                           | R                                                                                      | I                                         | C                                | E                                          | E                               | 综合    | 结果                                                                       |
+  | ----------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------- | -------------------------------- | ------------------------------------------ | ------------------------------- | ------- | -------------------------------------------------------------------------- |
+  | **A. 本地 bge-small-zh-v1.5** | sentence-transformers 加载 ~95MB，CPU 可跑     | 5（无外部依赖，永不停用                                                                | 5（零 API 成本）                          | 4（需装 torch/s-t，~200MB 依赖） | 4（MTEB 中文同级最优，512 维）             | 3（懒加载 + 单例 + lru_cache）  | **4.2** | ✅ **入选**                                                                |
+  | B. OpenAI 兼容 embeddings API | DeepSeek embeddings API                        | 2（DeepSeek 官方确认不支持 embeddings，无替代品通义/硅基流动免费可用但有外部依赖风险） | 4（$0.02/1M tokens，便宜）                | 5（无额外依赖）                  | 5（text-embedding-3-small 英文强中文一般） | 5（直接调 API，最省事）         | 4.2     | ❌ 有停用风险（DeepSeek key 无法用，换供应商要改环境变量）                 |
+  | C. 硅基流动 bge-m3 API        | 国内免费托管 bge-m3，中文更强（多语言/多粒度） | 3（API 有停用/限流/额度 3 重外部风险）                                                 | 5（免费额度够 MVP，0）                    | 5（无额外依赖）                  | 5（bge-m3 比 bge-small 强一个档次）        | 5（和本地一样快，直接 HTTP 请求 | 4.6     | ⏸️ 备选，v2 阶段升级时考虑替换本地模型（复用 provider 抽象，不用改业务层） |
+  | D. pgvector + 远程 embedding  | 先上 PostgreSQL                                | 2（要额外装 pgvector，MVP 阶段过重）                                                   | 4（要维护 Postgres + 外部 embedding API） | 2（重基础设施）                  | 5（性能上限高）                            | 1（要改数据库，迁移成本高）     | 2.8     | ❌ 过                                                                      |
+
+  问题三：LLM 重排做不做？（用户原方案：向量匹配 → 喂 DeepSeek Chat → AI 筛选 ID → 回库取数据）
+
+  | 维度     | 用 Chat LLM 重排                                  | 用 Cross-Encoder（bge-reranker）                                | FlowShelf 结论                                                    |
+  | -------- | ------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- |
+  | 单次成本 | ~¥0.01/次（Top-50 塞给 deepseek-chat，5K tokens） | 便宜 10-20×（硅基流动 bge-reranker 免费额度，或本地推理更便宜） | ⏸️ MVP 阶段 1 暂不加重排                                          |
+  | 延迟     | 400-800ms（Chat 生成慢）                          | 100-300ms（Cross-Encoder 前向推理固定时长）                     | ⏸️ MVP 千级数据，纯召回已经够干净，重排没有增益                   |
+  | 稳定性   | Chat LLM 输出"主观 ID 列表"，偶发漏判             | 输出 0-1 标准化分数，可阈值过滤，可解释                         | ⏸️ MVP 只接负例：搜「UI 不用，重排能命中」这种"复杂多跳查询才需要 | ⏸️ 过万条数据，召回 50 条开始混进噪声，Cross-Encoder 净化 |
+
+  阶段 1 结论：Embedding 选本地 bge-small-zh-v1.5，搜索 = 向量 × 0.7 + 关键词 × 0.3。重排层生成层留到 v2。理由：\*\*「UI 搜不到蓝湖」的核心矛盾是语义鸿沟，纯向量检索已足够，重排对此类查询无增益，且有增益的场景还没出现 |
+
+- **决策内容**：本地自托管 `BAAI/bge-small-zh-v1.5`（sentence-transformers 加载，512 维，~95MB，CPU 可跑，零外部依赖、永不停用），混合检索：向量 × 0.7 + 关键词 × 0.3。无 embedding 或维度不匹配的老数据自动降级纯关键词。混合检索权重：VECTOR_WEIGHT = 0.7，KEYWORD_WEIGHT = 0.3，MIN_VEC_THRESHOLD = 0.3
+- **理由分析**：
+  1. **成本**：本地推理零 API 成本，DeepSeek key 继续只负责摘要/标签
+  2. **停用风险**：无外部依赖，不会因 API 下线/限流失效
+  3. **质量**：bge-small-zh 在 MTEB 中文榜上同量级最优，512 维够 MVP
+  4. **可扩展**：provider 抽象层可切换，将来可接硅基流动 bge-m3 加速
+  5. **架构对齐**：和行业标准三层流水线的召回层对齐，重排层留扩展点
+- **备选方案**：
+  - 硅基流动 bge-m3 API（效果更好，v2 升级，复用 provider 抽象直接切）
+  - Cross-Encoder 重排（数据过万条后考虑）
+  - 上 pgvector（Phase 2 数据库迁移）
+- **影响范围**：`providers/local_embedding.py`（新建）、`base.py`、`config.py`、`tool_service.py`、`search_service.py`、`scripts/backfill_embeddings.py`（新建）
+- **后续改进**：数据量过万后考虑 Cross-Encoder 重排（`bge-reranker-v2-m3`）；EMBEDDING_PROVIDER 可配置改为硅基流动 bge-m3（效果升级
+
+### [2026-08-06] transformers 5.x 要求 torch>=2.4，与 numpy 2.x 冲突
+
+- **决策类型**：踩坑记录
+- **问题描述**：`pip install sentence-transformers` 默认装 transformers 5.14.1 + numpy 2.4.6，运行时报两个错：(1) "Disabling PyTorch because PyTorch >= 2.4 is required but found 2.2.2"；(2) "A module that was compiled using NumPy 1.x cannot be run in NumPy 2.4.6"
+- **原因**：torch 2.2.2 编译于 numpy 1.x；transformers 5.x 强制要求 torch>=2.4；pip 默认装最新版导致版本三角冲突
+- **解决方案**：`pip install "transformers>=4.41,<5" "numpy<2"` 降级到 transformers 4.57.6 + numpy 1.26.4，与 torch 2.2.2 兼容
+- **教训**：Python 生态依赖版本要钉死，不能裸装最新版。requirements.txt 应写 `sentence-transformers>=3.0.0` 并在文档记录兼容版本矩阵（torch 2.2.2 + transformers 4.x + numpy 1.x）
+
+### [2026-08-06] Tool 表无 embedding 字段，SQLite create_all 不自动 ALTER
+
+- **决策类型**：踩坑记录
+- **问题描述**：Card 模型早有 embedding 字段，Tool 模型没有。新增 `Tool.embedding` Column 后，`Base.metadata.create_all` 只对不存在的新表生效，已存在的 tools 表不会自动 `ALTER TABLE ADD COLUMN`。项目未用 Alembic，老数据库的 tools 表缺 embedding 列，写入报 `no such column: embedding`
+- **解决方案**：在 `backfill_embeddings.py` 回填脚本前置迁移逻辑——用 `inspect(sync_conn).get_columns("tools")` 检测列是否存在，不存在则 `ALTER TABLE tools ADD COLUMN embedding JSON`
+- **教训**：SQLite + `create_all` 的项目，模型加字段必须配套 ALTER 脚本；迁移逻辑放在回填脚本里一起跑，对用户更友好（一条命令完成迁移+回填）
+
+### [2026-08-06] bge query 前缀 + 维度不匹配降级，避免老向量误用
+
+- **决策类型**：隐藏需求 / 优化
+- **问题描述**：两个隐藏问题在改造中暴露：(1) bge-small-zh-v1.5 官方推荐 query 加前缀"为这个句子生成表示以用于检索相关文章："以提升检索效果，文档不加；(2) 存量 Card.embedding 是 1536 维 hash 假向量，新 bge 向量是 512 维，维度不匹配时直接算余弦相似度会 `_cosine_similarity` 截断到较短长度得到无意义分数
+- **解决方案**：
+  1. `LocalEmbeddingProvider.embed_text/is_query` 加 `is_query` 参数，True 时自动加前缀
+  2. `SearchService._compute_hybrid_score` 严格校验 `len(query_embedding) == len(doc_embedding)`，不匹配降级纯关键词，避免老向量误用
+- **影响范围**：`local_embedding.py`、`base.py`（generate_embedding 签名加 is_query）、`search_service.py`
+- **后续改进**：回填脚本跑完后所有向量统一 512 维，校验逻辑可简化但保留作防御
+
 ---
 
 ## 成本/延迟数据
@@ -199,9 +274,10 @@
 
 ## 版本历史
 
-| 版本 | 日期       | 变更说明                         |
-| ---- | ---------- | -------------------------------- |
-| v0.1 | 2026-08-06 | 初始版本，记录项目启动阶段的决策 |
+| 版本 | 日期       | 变更说明                                                                               |
+| ---- | ---------- | -------------------------------------------------------------------------------------- |
+| v0.1 | 2026-08-06 | 初始版本，记录项目启动阶段的决策                                                       |
+| v0.2 | 2026-08-06 | 追加真语义搜索改造的踩坑与决策（bge-small-zh 本地化、版本冲突、SQLite 迁移、维度校验） |
 
 ---
 

@@ -17,7 +17,7 @@ export default function RootLayout({
         <div className="flex min-h-screen flex-col">
           {/* Header */}
           <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-            <div className="container mx-auto flex h-14 items-center justify-between px-4">
+            <div className="container mx-auto flex h-14 items-center justify-between gap-4 px-4">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">🧩</span>
                 <span className="text-lg font-bold">FlowShelf</span>
@@ -29,9 +29,16 @@ export default function RootLayout({
                 <a href="/toolbox" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
                   🛠️ 工具箱
                 </a>
-                <a href="/search" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-                  🔍 搜索
-                </a>
+                {/* 全局搜索：GET 表单跳转到 /search?q=...，跨卡片库+工具箱 */}
+                <form action="/search" method="get" className="flex items-center">
+                  <input
+                    type="text"
+                    name="q"
+                    placeholder="🔍 搜索卡片 / 工具"
+                    className="input h-9 w-44 md:w-56"
+                    aria-label="全局搜索"
+                  />
+                </form>
               </nav>
             </div>
           </header>
