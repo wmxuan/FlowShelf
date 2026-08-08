@@ -1,28 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { usePathname } from 'next/navigation';
 
 const NAV_ITEMS = [
   { href: '/tabs', label: '🗂️ Tab 管理' },
   { href: '/cards', label: '📚 卡片库' },
   { href: '/toolbox', label: '🛠️ 工具箱' },
   { href: '/learning', label: '📥 暂存区' },
+  { href: '/search', label: '🔍 全局搜索' },
 ];
 
 export default function Header() {
   const pathname = usePathname();
-  const router = useRouter();
-  const [searchQuery, setSearchQuery] = useState('');
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    const q = searchQuery.trim();
-    if (q) {
-      router.push(`/search?q=${encodeURIComponent(q)}`);
-    }
-  };
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -48,16 +38,6 @@ export default function Header() {
               </Link>
             );
           })}
-          <form onSubmit={handleSearch} className="flex items-center">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="🔍 搜索卡片 / 工具"
-              className="input h-9 w-44 md:w-56"
-              aria-label="全局搜索"
-            />
-          </form>
         </nav>
       </div>
     </header>
