@@ -307,6 +307,120 @@ async function handleBridgeAction(
           }
         : null;
     }
+    case "groupTabs": {
+      // 「一键整理」：把所有窗口的标签聚合到当前窗口，按 AI 分组创建
+      // Chrome 原生标签群组，最后关闭变空的窗口。
+      const groups = payload.groups as {
+        name: string;
+        tabIds: number[];
+      }[];
+      if (!Array.isArray(groups)) {
+        return { success: false, error: "groups required" };
+      }
+
+      // Step 1: 获取当前窗口（最后聚焦的窗口，SW 中比 getCurrent 更可靠）
+      const currentWindow = await chrome.windows.getLastFocused();
+      const currentWindowId = currentWindow.id!;
+
+      // Step 2: 查询所有 tab，建立 tabId → windowId 映射
+      const allTabs = await chrome.tabs.query({});
+      const tabWindowMap = new Map<number, number>();
+      for (const t of allTabs) {
+        if (t.id != null && t.windowId != null) {
+          tabWindowMap.set(t.id, t.windowId);
+        }
+      }
+
+      // Step 3: 先解散所有窗口的所有现有群组（用户选择"先全部解散再重整"）
+      const allTabIds = allTabs
+        .map((t) => t.id)
+        .filter((id): id is number => id != null);
+      if (allTabIds.length > 0) {
+        try {
+          await chrome.tabs.ungroup(allTabIds);
+        } catch (err) {
+          console.warn("[FlowShelf BG] ungroup all failed:", err);
+        }
+      }
+
+      // Step 4: 颜色循环（避开 grey，grey 留给未命名组）
+      const COLORS: chrome.tabGroups.ColorEnum[] = [
+        "blue",
+        "cyan",
+        "red",
+        "yellow",
+        "green",
+        "pink",
+        "purple",
+        "orange",
+      ];
+
+      // Step 5: 按 AI 分组逐组处理——把不在当前窗口的 tab 移过来，统一建组
+      const results: {
+        name: string;
+        windowId: number;
+        groupId: number;
+        tabCount: number;
+      }[] = [];
+
+      for (let gi = 0; gi < groups.length; gi++) {
+        const { name, tabIds } = groups[gi];
+        if (!tabIds || tabIds.length === 0) continue;
+
+        // 过滤掉已关闭的 tab
+        const validTabIds = tabIds.filter((id) => tabWindowMap.has(id));
+        if (validTabIds.length === 0) continue;
+
+        // 把不在当前窗口的 tab 移到当前窗口末尾
+        const tabsToMove = validTabIds.filter(
+          (id) => tabWindowMap.get(id) !== currentWindowId
+        );
+        if (tabsToMove.length > 0) {
+          try {
+            await chrome.tabs.move(tabsToMove, {
+              windowId: currentWindowId,
+              index: -1, // 移到末尾，避免打乱已有顺序
+            });
+          } catch (err) {
+            console.warn("[FlowShelf BG] move tabs to current window failed:", err);
+          }
+        }
+
+        // 在当前窗口创建群组
+        const groupId = await chrome.tabs.group({
+          tabIds: validTabIds,
+          createProperties: { windowId: currentWindowId },
+        });
+        await chrome.tabGroups.update(groupId, {
+          title: name,
+          color: COLORS[gi % COLORS.length],
+        });
+        results.push({
+          name,
+          windowId: currentWindowId,
+          groupId,
+          tabCount: validTabIds.length,
+        });
+      }
+
+      // Step 6: 关闭变空的普通窗口（保留当前窗口和特殊窗口如 devtools）
+      const remainingWindows = await chrome.windows.getAll();
+      for (const win of remainingWindows) {
+        if (win.id == null) continue;
+        if (win.id === currentWindowId) continue;
+        if (win.type !== "normal") continue;
+        const tabsInWin = await chrome.tabs.query({ windowId: win.id });
+        if (tabsInWin.length === 0) {
+          try {
+            await chrome.windows.remove(win.id);
+          } catch (err) {
+            console.warn("[FlowShelf BG] close empty window failed:", err);
+          }
+        }
+      }
+
+      return { success: true, results };
+    }
     default:
       return { error: `Unknown action: ${action}` };
   }

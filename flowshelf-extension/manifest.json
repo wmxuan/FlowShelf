@@ -20,7 +20,7 @@
   "chrome_url_overrides": {
     "newtab": "src/newtab/index.html"
   },
-  "permissions": ["storage", "tabs", "activeTab", "contextMenus", "scripting", "bookmarks", "notifications"],
+  "permissions": ["storage", "tabs", "tabGroups", "activeTab", "contextMenus", "scripting", "bookmarks", "notifications"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {

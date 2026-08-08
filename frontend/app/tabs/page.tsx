@@ -2,13 +2,35 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
+  DndContext,
+  DragOverlay,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  type DragEndEvent,
+  type DragStartEvent,
+  type DragOverEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import DeleteConfirmButton from '@/components/DeleteConfirmButton';
+import {
   getAllTabs,
   closeTab,
   activateTab,
   getTabContent,
   checkBridgeAvailable,
   onTabEvent,
+  groupTabs,
   type ChromeTabInfo,
+  type TabGroupRequest,
 } from '@/lib/chrome-bridge';
 
 interface TabGroup {
@@ -27,11 +49,164 @@ interface TabAssignResponse {
   group_name: string;
 }
 
+/** tab 拖拽时的稳定唯一 id：g-{gi}-i-{tabIndex} */
+function tabDragId(gi: number, tabIndex: number) {
+  return `g-${gi}-i-${tabIndex}`;
+}
+
+/** 组容器 id，用于 dnd-kit 中把 tab 拖到组头或组空白区时识别归属 */
+function groupContainerId(gi: number) {
+  return `group-${gi}`;
+}
+
+/** 解析 tabDragId → { gi, tabIndex } */
+function parseTabDragId(id: string): { gi: number; tabIndex: number } | null {
+  const m = id.match(/^g-(-?\d+)-i-(-?\d+)$/);
+  if (!m) return null;
+  return { gi: Number(m[1]), tabIndex: Number(m[2]) };
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+
+/** 分组卡片顶部边条颜色循环（与 background 中 Chrome 群组颜色一致） */
+const GROUP_COLORS = [
+  '#3b82f6', // blue
+  '#06b6d4', // cyan
+  '#ef4444', // red
+  '#f59e0b', // yellow
+  '#10b981', // green
+  '#ec4899', // pink
+  '#8b5cf6', // purple
+  '#f97316', // orange
+];
 
 function isHttpTab(url?: string): boolean {
   return !!url && (url.startsWith('http') || url.startsWith('https'));
 }
+
+// ---------- 可拖拽 tab 行 ----------
+
+interface SortableTabRowProps {
+  gi: number;
+  tabIndex: number;
+  tab: ChromeTabInfo;
+  isDragging?: boolean;
+  editMode: boolean;
+  enriching: boolean;
+  onActivate: () => void;
+  onCollect: (type: 'article' | 'tool') => void;
+  onClose: () => void;
+}
+
+function SortableTabRow({
+  gi,
+  tabIndex,
+  tab,
+  isDragging,
+  editMode,
+  enriching,
+  onActivate,
+  onCollect,
+  onClose,
+}: SortableTabRowProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging: sortableDragging,
+  } = useSortable({ id: tabDragId(gi, tabIndex), data: { type: 'tab', gi, tabIndex } });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: sortableDragging ? 0.4 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group flex items-center gap-3 p-3 hover:bg-muted/30 transition-colors ${
+        isDragging ? 'shadow-lg ring-2 ring-primary/50 bg-muted/80' : ''
+      }`}
+    >
+      {editMode ? (
+        <span
+          className="text-lg cursor-grab active:cursor-grabbing select-none touch-none"
+          title="拖拽调整分组或顺序"
+          {...attributes}
+          {...listeners}
+        >
+          ⠿
+        </span>
+      ) : (
+        <span className="text-lg">🌐</span>
+      )}
+      <div
+        className={`flex-1 min-w-0 ${editMode ? '' : 'cursor-pointer'}`}
+        onClick={editMode ? undefined : onActivate}
+        title={tab.title}
+      >
+        <div className="font-medium text-sm truncate">{tab.title || '无标题'}</div>
+        <div className="text-xs text-muted-foreground truncate">{tab.url}</div>
+      </div>
+      {!editMode && (
+        <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={onCollect.bind(null, 'article')}
+            disabled={enriching}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-50"
+            title="收藏为知识卡片"
+          >
+            📄 卡片
+          </button>
+          <button
+            onClick={onCollect.bind(null, 'tool')}
+            disabled={enriching}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-50"
+            title="收藏为工具"
+          >
+            🔧 工具
+          </button>
+          <button
+            onClick={onClose}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
+            title="关闭标签"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- 组容器 droppable（让空组也能接收拖入）----------
+
+function GroupDropZone({
+  gi,
+  children,
+}: {
+  gi: number;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: groupContainerId(gi) });
+  return (
+    <div
+      ref={setNodeRef}
+      id={groupContainerId(gi)}
+      className={`border-t border-border/50 min-h-[40px] transition-colors ${
+        isOver ? 'bg-primary/5 ring-1 ring-primary/20' : ''
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ---------- 页面主体 ----------
 
 export default function TabsPage() {
   const [tabs, setTabs] = useState<ChromeTabInfo[]>([]);
@@ -42,21 +217,50 @@ export default function TabsPage() {
   const [bridgeAvailable, setBridgeAvailable] = useState(false);
   const [enriching, setEnriching] = useState<number | null>(null);
   const [enrichMsg, setEnrichMsg] = useState('');
+  const [organizing, setOrganizing] = useState(false);
   const enrichMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [editMode, setEditMode] = useState(false);
+  /** 编辑前快照：取消编辑时恢复 */
+  const [editSnapshot, setEditSnapshot] = useState<{
+    groups: TabGroup[];
+    expanded: Set<number>;
+  } | null>(null);
+  /** 当前处于编辑状态的组下标：显示组名输入框 */
+  const [editingGroupIdx, setEditingGroupIdx] = useState<number | null>(null);
+  const [editingGroupName, setEditingGroupName] = useState('');
+  /** 正在拖拽的 tab 定位信息（用于 DragOverlay 展示） */
+  const [activeDrag, setActiveDrag] = useState<{
+    gi: number;
+    tabIndex: number;
+  } | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
 
   // Refs：事件监听器中读取最新状态
   const tabsRef = useRef(tabs);
   const groupsRef = useRef(groups);
   const loadedRef = useRef(false);
-  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
-  useEffect(() => { groupsRef.current = groups; }, [groups]);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+  useEffect(() => {
+    groupsRef.current = groups;
+  }, [groups]);
+
+  const showEnrichMsg = useCallback((msg: string, ms = 4000) => {
+    setEnrichMsg(msg);
+    if (enrichMsgTimer.current) clearTimeout(enrichMsgTimer.current);
+    enrichMsgTimer.current = setTimeout(() => setEnrichMsg(''), ms);
+  }, []);
 
   const loadAndGroupTabs = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       let allTabs = await getAllTabs();
-      // 如果首次获取为空，等待 1s 后重试一次（Bridge 可能刚就绪，SW 尚未唤醒）
       if (allTabs.length === 0) {
         await new Promise((r) => setTimeout(r, 1000));
         allTabs = await getAllTabs();
@@ -81,10 +285,7 @@ export default function TabsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          tabs: httpTabs.map((t) => ({
-            url: t.url,
-            title: t.title,
-          })),
+          tabs: httpTabs.map((t) => ({ url: t.url, title: t.title })),
         }),
       });
 
@@ -118,7 +319,6 @@ export default function TabsPage() {
   const handleCloseTab = async (tabId: number) => {
     try {
       await closeTab(tabId);
-      // 本地即时移除，不重新触发 AI 归组
       removeTabFromState(tabId);
     } catch (err) {
       setError(err instanceof Error ? err.message : '关闭失败');
@@ -150,10 +350,7 @@ export default function TabsPage() {
         }),
       });
       if (!res.ok) throw new Error(`保存失败: ${res.status}`);
-      setEnrichMsg('✅ 已保存到待学习队列，AI 正在后台生成摘要...');
-      // 成功提示 3 秒后自动消失；用 ref 清掉之前的 timer，避免连续操作时被提前清空
-      if (enrichMsgTimer.current) clearTimeout(enrichMsgTimer.current);
-      enrichMsgTimer.current = setTimeout(() => setEnrichMsg(''), 3000);
+      showEnrichMsg('✅ 已保存到待学习队列，AI 正在后台生成摘要...', 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : '收藏失败');
     } finally {
@@ -172,19 +369,45 @@ export default function TabsPage() {
         // 静默失败
       }
     }
-    // 本地即时移除整组，不重新触发 AI 归组
     removeGroupFromState(group);
   };
 
-  /**
-   * 本地移除单个标签：更新 tabs 数组和 groups 结构
-   * 如果某组移除后为空，则删除该组
-   *
-   * 不能用嵌套 functional update（在 setTabs updater 里调 setGroups）：
-   * React StrictMode 下 updater 双调用，setGroups 的"对大于 removedIndex 的
-   * index 减 1"是非幂等操作，第二次会基于第一次结果再减一次，导致 index 错乱、
-   * 标签换组。这里基于 ref 一次性算出目标值后直接设值，规避该问题。
-   */
+  /** 一键整理：使用当前（编辑后）最新的 groups 应用为 Chrome 原生标签群组 */
+  const handleOrganizeTabs = async () => {
+    // 编辑模式下点整理：先退出编辑模式，再执行整理
+    if (editMode) setEditMode(false);
+    setOrganizing(true);
+    setError('');
+    try {
+      const requestGroups: TabGroupRequest[] = groups
+        .map((g) => ({
+          name: g.name.trim() || '未命名分组',
+          tabIds: g.tab_indices
+            .map((i) => tabs[i]?.id)
+            .filter((id): id is number => id != null),
+        }))
+        .filter((g) => g.tabIds.length > 0);
+
+      if (requestGroups.length === 0) {
+        setError('没有可整理的标签');
+        return;
+      }
+
+      const result = await groupTabs(requestGroups);
+      if (result.success) {
+        const groupCount = new Set(result.results?.map((r) => r.groupId)).size;
+        showEnrichMsg(`✅ 已创建 ${groupCount} 个标签群组，查看浏览器标签栏`, 4000);
+      } else {
+        setError(result.error || '整理失败');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '整理失败');
+    } finally {
+      setOrganizing(false);
+    }
+  };
+
+  /** 删除单个 tab：本地即时移除，不重新触发 AI 归组 */
   function removeTabFromState(tabId: number) {
     const removedIndex = tabsRef.current.findIndex((t) => t.id === tabId);
     if (removedIndex === -1) return;
@@ -203,9 +426,6 @@ export default function TabsPage() {
     setGroups(newGroups);
   }
 
-  /**
-   * 本地移除整组：从 tabs 数组移除该组所有标签，并删除该组
-   */
   function removeGroupFromState(group: TabGroup) {
     const groupTabIds = new Set<number>(
       group.tab_indices
@@ -229,9 +449,8 @@ export default function TabsPage() {
     });
   }
 
-  // ============ 实时同步：单标签分组 ============
+  // ---------- 实时同步：单标签分组 ----------
 
-  /** 构建 assign API 所需的已有分组上下文（仅传组名+数量+1个示例，省 token） */
   function buildExistingGroups() {
     return groupsRef.current.map((g) => ({
       name: g.name,
@@ -244,7 +463,6 @@ export default function TabsPage() {
     }));
   }
 
-  /** 将新标签分配到已有分组或创建新分组（增量更新，不重新归组全部标签） */
   async function assignNewTab(tab: ChromeTabInfo, newTabIndex: number) {
     const existingGroups = buildExistingGroups();
     let groupName = '新标签';
@@ -290,10 +508,8 @@ export default function TabsPage() {
     });
   }
 
-  // 订阅标签页事件：实时同步新增/关闭/URL变化
   useEffect(() => {
     const unsubscribe = onTabEvent((data) => {
-      // 初始加载未完成时跳过，避免与 loadAndGroupTabs 竞争
       if (!loadedRef.current) return;
 
       const { event, tab } = data;
@@ -318,7 +534,6 @@ export default function TabsPage() {
         const changeInfo = tab.changeInfo || {};
 
         if (existingIndex === -1) {
-          // 不在列表中：若已变为 http，作为新标签加入
           if (httpNow && !tabsRef.current.some((t) => t.id === tab.id)) {
             const newTabIndex = tabsRef.current.length;
             setTabs((prev) => [...prev, tab]);
@@ -336,7 +551,6 @@ export default function TabsPage() {
         }
 
         if (urlChanged) {
-          // URL 变化：先从旧组移除，更新标签信息，再用新 URL 重新分组
           setGroups((prevGroups) =>
             prevGroups
               .map((g) => ({
@@ -355,6 +569,36 @@ export default function TabsPage() {
     return unsubscribe;
   }, []);
 
+  // ---------- 编辑模式：进入 / 取消 / 完成 ----------
+
+  function enterEditMode() {
+    setEditSnapshot({
+      groups: groups.map((g) => ({ ...g, tab_indices: [...g.tab_indices] })),
+      expanded: new Set(expandedGroups),
+    });
+    setEditMode(true);
+  }
+
+  function cancelEditMode() {
+    if (editSnapshot) {
+      setGroups(editSnapshot.groups);
+      setExpandedGroups(editSnapshot.expanded);
+    }
+    setEditSnapshot(null);
+    setEditingGroupIdx(null);
+    setEditingGroupName('');
+    setEditMode(false);
+  }
+
+  function saveEditMode() {
+    // 自动删除空组
+    setGroups((prev) => prev.filter((g) => g.tab_indices.length > 0));
+    setEditSnapshot(null);
+    setEditingGroupIdx(null);
+    setEditingGroupName('');
+    setEditMode(false);
+  }
+
   const toggleGroup = (gi: number) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
@@ -363,14 +607,175 @@ export default function TabsPage() {
     });
   };
 
+  // ---------- 组名编辑 ----------
+
+  function startEditGroupName(gi: number) {
+    setEditingGroupIdx(gi);
+    setEditingGroupName(groups[gi]?.name ?? '');
+  }
+
+  function commitGroupName(gi: number) {
+    const newName = editingGroupName.trim() || `分组 ${gi + 1}`;
+    setGroups((prev) =>
+      prev.map((g, i) => (i === gi ? { ...g, name: newName } : g))
+    );
+    setEditingGroupIdx(null);
+    setEditingGroupName('');
+  }
+
+  function cancelEditGroupName() {
+    setEditingGroupIdx(null);
+    setEditingGroupName('');
+  }
+
+  // ---------- 拖拽处理：组内排序 + 跨组移动 ----------
+
+  function handleDragStart(event: DragStartEvent) {
+    const parsed = parseTabDragId(String(event.active.id));
+    if (!parsed) return;
+    setActiveDrag(parsed);
+  }
+
+  function handleDragOver(event: DragOverEvent) {
+    // 跨组移动：实时把源 tab 插入到目标组的目标位置（或者在悬停到组容器时追加到组尾）
+    const { active, over } = event;
+    const src = parseTabDragId(String(active.id));
+    if (!src) return;
+    if (!over) return;
+
+    const overId = String(over.id);
+    let targetGi: number;
+    let insertAtEnd = false;
+
+    const overTab = parseTabDragId(overId);
+    if (overTab) {
+      targetGi = overTab.gi;
+    } else if (overId.startsWith('group-')) {
+      const m = overId.match(/^group-(-?\d+)$/);
+      if (!m) return;
+      targetGi = Number(m[1]);
+      insertAtEnd = true;
+    } else {
+      return;
+    }
+
+    const srcGi = src.gi;
+    const srcTabIndex = src.tabIndex;
+
+    setGroups((prev) => {
+      if (targetGi >= prev.length || srcGi >= prev.length) return prev;
+      if (!prev[srcGi].tab_indices.includes(srcTabIndex)) return prev;
+
+      if (srcGi === targetGi) {
+        // 同组：在 onDragEnd 里做排序（arrayMove 更精确），此处不处理
+        return prev;
+      }
+
+      // 跨组：先从源组移除，再插入到目标组
+      const srcGroup = prev[srcGi];
+      const srcIndicesArr = [...srcGroup.tab_indices];
+      const posInSrc = srcIndicesArr.indexOf(srcTabIndex);
+      if (posInSrc === -1) return prev;
+      srcIndicesArr.splice(posInSrc, 1);
+
+      const dstGroup = prev[targetGi];
+      let dstIndicesArr = [...dstGroup.tab_indices];
+      if (insertAtEnd) {
+        dstIndicesArr.push(srcTabIndex);
+      } else {
+        const overParsed = parseTabDragId(overId);
+        if (!overParsed) {
+          dstIndicesArr.push(srcTabIndex);
+        } else {
+          const posInDst = dstIndicesArr.indexOf(overParsed.tabIndex);
+          if (posInDst === -1) {
+            dstIndicesArr.push(srcTabIndex);
+          } else {
+            dstIndicesArr.splice(posInDst, 0, srcTabIndex);
+          }
+        }
+      }
+
+      const next = [...prev];
+      next[srcGi] = { ...srcGroup, tab_indices: srcIndicesArr };
+      next[targetGi] = { ...dstGroup, tab_indices: dstIndicesArr };
+      // 不删除空组：避免 gi 偏移导致 dnd-kit active/over id 映射错乱。
+      // 源组变空后保留，用户可手动「删除组」。
+      return next;
+    });
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    setActiveDrag(null);
+
+    const src = parseTabDragId(String(active.id));
+    if (!src || !over) return;
+
+    const overId = String(over.id);
+    if (overId.startsWith('group-')) return; // 已在 dragOver 中处理过"追加到组尾"
+
+    const dst = parseTabDragId(overId);
+    if (!dst) return;
+
+    // 同组排序（跨组已经在 dragOver 中处理，但 dragEnd 得到最终位置更准确）
+    if (src.gi === dst.gi) {
+      setGroups((prev) => {
+        if (src.gi >= prev.length) return prev;
+        const srcGroup = prev[src.gi];
+        const srcList = [...srcGroup.tab_indices];
+        const oldPos = srcList.indexOf(src.tabIndex);
+        const newPos = srcList.indexOf(dst.tabIndex);
+        if (oldPos === -1 || newPos === -1) return prev;
+        if (oldPos === newPos) return prev;
+        const moved = arrayMove(srcList, oldPos, newPos);
+        const next = [...prev];
+        next[src.gi] = { ...srcGroup, tab_indices: moved };
+        return next;
+      });
+    }
+  }
+
+  // ---------- 新增 / 删除分组 ----------
+
+  function handleAddNewGroup() {
+    setGroups((prev) => [...prev, { name: `新分组 ${prev.length + 1}`, tab_indices: [] }]);
+    setExpandedGroups((prev) => new Set([...prev, groups.length]));
+  }
+
+  function handleDeleteGroup(gi: number) {
+    setGroups((prev) => {
+      // 把该组的 tab 放回"未分组"状态——但系统中没有"未分组"组。
+      // 折中：若该组仍有 tab，则拒绝删除（提示先把 tab 移到其他组）；若空组则直接删。
+      if (prev[gi]?.tab_indices.length > 0) {
+        setError('该分组下还有标签，请先把标签移到其他分组再删除');
+        return prev;
+      }
+      const next = prev.filter((_, i) => i !== gi);
+      // 调整 expandedGroups
+      setExpandedGroups((prevExp) => {
+        const nextExp = new Set<number>();
+        let deletedBefore = 0;
+        for (let i = 0; i < prev.length; i++) {
+          if (i === gi) {
+            deletedBefore++;
+            continue;
+          }
+          if (prevExp.has(i)) nextExp.add(i - deletedBefore);
+        }
+        return nextExp;
+      });
+      return next;
+    });
+  }
+
   if (!bridgeAvailable) {
     return (
       <div className="max-w-2xl mx-auto text-center py-20">
         <div className="text-6xl mb-6">🔌</div>
         <h1 className="text-2xl font-bold mb-4">需要安装 FlowShelf 浏览器扩展</h1>
         <p className="text-muted-foreground mb-6">
-          Tab 管理功能需要通过 FlowShelf Chrome 扩展与浏览器通信。
-          请先安装扩展后刷新此页面。
+          Tab 管理功能需要通过 FlowShelf Chrome 扩展与浏览器通信。请先安装扩展后刷新此页面。
         </p>
         <p className="text-sm text-muted-foreground">
           如果你已安装扩展但仍看到此提示，请确保扩展已在
@@ -381,25 +786,74 @@ export default function TabsPage() {
     );
   }
 
+  const activeTab =
+    activeDrag && tabs[activeDrag.tabIndex] ? tabs[activeDrag.tabIndex] : null;
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold">🗂️ Tab 管理台</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            AI 自动归组所有窗口的标签页，一键收藏到待学习或工具箱
+            AI 自动归组所有窗口的标签页。
+            {editMode && (
+              <span className="text-primary font-medium">
+                {' '}
+                · 编辑模式：拖拽 ⠿ 调整顺序/分组，点击组名可改名
+              </span>
+            )}
           </p>
         </div>
-        <button
-          onClick={loadAndGroupTabs}
-          disabled={loading}
-          className="button button-outline"
-        >
-          {loading ? '归组中...' : '🔄 重新归组'}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {editMode ? (
+            <>
+              <button
+                onClick={cancelEditMode}
+                disabled={loading}
+                className="button button-outline"
+                title="清除本次所有编辑操作，退出编辑"
+              >
+                ✕ 取消编辑
+              </button>
+              <button
+                onClick={saveEditMode}
+                disabled={loading}
+                className="button button-primary"
+                title="保存本次所有编辑操作，退出编辑"
+              >
+                ✓ 完成编辑
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={enterEditMode}
+                disabled={loading}
+                className="button button-outline"
+                title="编辑：调整分组顺序和改名"
+              >
+                ✏️ 编辑
+              </button>
+              <button
+                onClick={handleOrganizeTabs}
+                disabled={organizing || loading || groups.length === 0}
+                className="button button-primary"
+                title="按当前分组结果创建 Chrome 标签群组"
+              >
+                {organizing ? '整理中...' : '✨ 一键整理'}
+              </button>
+              <button
+                onClick={loadAndGroupTabs}
+                disabled={loading}
+                className="button button-outline"
+              >
+                {loading ? '归组中...' : '🔄 重新归组'}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* 操作反馈 Toast：固定在视口顶部居中，滚动到底部也能看到 */}
       {(enrichMsg || error) && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 max-w-sm w-full px-4">
           {enrichMsg && (
@@ -430,99 +884,168 @@ export default function TabsPage() {
       )}
 
       {!loading && groups.length > 0 && (
-        <div className="space-y-4">
-          {groups.map((group, gi) => {
-            const expanded = expandedGroups.has(gi);
-            return (
-              <div key={gi} className="card overflow-hidden p-0">
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={editMode ? handleDragStart : undefined}
+          onDragOver={editMode ? handleDragOver : undefined}
+          onDragEnd={editMode ? handleDragEnd : undefined}
+        >
+          <div
+            className="grid gap-4 items-start"
+            style={{
+              gridTemplateColumns:
+                'repeat(auto-fit, minmax(max(260px, 25%), 1fr))',
+              maxWidth: '1400px',
+            }}
+          >
+            {groups.map((group, gi) => {
+              const expanded = expandedGroups.has(gi);
+              const isEditingName = editingGroupIdx === gi;
+              const groupColor = GROUP_COLORS[gi % GROUP_COLORS.length];
+              return (
                 <div
-                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => toggleGroup(gi)}
+                  key={gi}
+                  className="card p-0"
+                  data-group-idx={gi}
+                  style={{ borderTop: `4px solid ${groupColor}` }}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground">
-                      {expanded ? '▼' : '▶'}
-                    </span>
-                    <span className="font-semibold">{group.name}</span>
-                    <span className="inline-flex items-center justify-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                      {group.tab_indices.length}
-                    </span>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleCloseGroup(group);
-                    }}
-                    className="text-xs text-muted-foreground hover:text-red-500 transition-colors"
+                  <div
+                    className="flex items-center justify-between p-4 cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => toggleGroup(gi)}
                   >
-                    🗑 整组关闭
-                  </button>
-                </div>
-
-                {expanded && (
-                  <>
-                    <div className="border-t border-border/50 divide-y divide-border/30">
-                      {group.tab_indices.map((ti) => {
-                        const tab = tabs[ti];
-                        if (!tab) return null;
-                        const isEnriching = enriching === ti;
-                        return (
-                          <div
-                            key={ti}
-                            className="flex items-center gap-3 p-3 hover:bg-muted/30 transition-colors"
-                          >
-                            <span className="text-lg">🌐</span>
-                            <div
-                              className="flex-1 min-w-0 cursor-pointer"
-                              onClick={() => handleActivateTab(tab.id)}
-                              title={tab.title}
-                            >
-                              <div className="font-medium text-sm truncate">
-                                {tab.title || '无标题'}
-                              </div>
-                              <div className="text-xs text-muted-foreground truncate">
-                                {tab.url}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1 flex-shrink-0">
-                              <button
-                                onClick={() =>
-                                  handleCollectToLearning(ti, 'article')
-                                }
-                                disabled={isEnriching}
-                                className="text-xs px-2 py-1 rounded border border-border hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-50"
-                                title="收藏为知识卡片"
-                              >
-                                📄 卡片
-                              </button>
-                              <button
-                                onClick={() =>
-                                  handleCollectToLearning(ti, 'tool')
-                                }
-                                disabled={isEnriching}
-                                className="text-xs px-2 py-1 rounded border border-border hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-50"
-                                title="收藏为工具"
-                              >
-                                🔧 工具
-                              </button>
-                              <button
-                                onClick={() => handleCloseTab(tab.id)}
-                                className="text-xs px-2 py-1 rounded border border-border hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
-                                title="关闭标签"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: groupColor }}
+                      />
+                      <span className="text-sm text-muted-foreground flex-shrink-0">
+                        {expanded ? '▼' : '▶'}
+                      </span>
+                      {isEditingName ? (
+                        <input
+                          autoFocus
+                          value={editingGroupName}
+                          onChange={(e) => setEditingGroupName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitGroupName(gi);
+                            if (e.key === 'Escape') cancelEditGroupName();
+                          }}
+                          onBlur={() => commitGroupName(gi)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="font-semibold bg-muted px-2 py-1 rounded outline-none ring-1 ring-primary/30 focus:ring-primary min-w-0"
+                          placeholder="分组名"
+                        />
+                      ) : editMode ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startEditGroupName(gi);
+                          }}
+                          className="font-semibold text-left hover:underline decoration-dotted min-w-0 truncate"
+                          title="点击编辑组名"
+                        >
+                          {group.name}
+                        </button>
+                      ) : (
+                        <span className="font-semibold truncate">{group.name}</span>
+                      )}
+                      <span className="inline-flex items-center justify-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary flex-shrink-0">
+                        {group.tab_indices.length}
+                      </span>
                     </div>
-                  </>
-                )}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {editMode && group.tab_indices.length === 0 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteGroup(gi);
+                          }}
+                          className="text-xs text-muted-foreground hover:text-red-500 transition-colors"
+                          title="删除空分组"
+                        >
+                          🗑 删除组
+                        </button>
+                      )}
+                      {!editMode && (
+                        <DeleteConfirmButton
+                          onConfirm={() => handleCloseGroup(group)}
+                          buttonClassName="text-xs text-muted-foreground hover:text-red-500 transition-colors"
+                          buttonTitle="整组关闭"
+                          confirmText={`是否关闭"${group.name}"分组下的所有标签？`}
+                          stopPropagation
+                        >
+                          ✕ 整组关闭
+                        </DeleteConfirmButton>
+                      )}
+                    </div>
+                  </div>
+
+                  {expanded && (
+                    <GroupDropZone gi={gi}>
+                      <SortableContext
+                        items={group.tab_indices.map((ti) => tabDragId(gi, ti))}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        <div className="divide-y divide-border/30">
+                          {group.tab_indices.map((ti) => {
+                            const tab = tabs[ti];
+                            if (!tab) return null;
+                            return (
+                              <SortableTabRow
+                                key={`${gi}-${ti}`}
+                                gi={gi}
+                                tabIndex={ti}
+                                tab={tab}
+                                editMode={editMode}
+                                enriching={enriching === ti}
+                                onActivate={() => handleActivateTab(tab.id)}
+                                onCollect={(type) => handleCollectToLearning(ti, type)}
+                                onClose={() => handleCloseTab(tab.id)}
+                              />
+                            );
+                          })}
+                        </div>
+                      </SortableContext>
+                      {group.tab_indices.length === 0 && (
+                        <div className="text-xs text-muted-foreground text-center py-3 border-t border-border/30">
+                          {editMode ? '拖拽标签到此处加入该分组' : '暂无标签'}
+                        </div>
+                      )}
+                    </GroupDropZone>
+                  )}
+                </div>
+              );
+            })}
+            {editMode && (
+              <button
+                onClick={handleAddNewGroup}
+                className="card p-0 border-2 border-dashed border-border hover:border-primary hover:bg-primary/5 transition-colors flex items-center justify-center min-h-[120px] cursor-pointer"
+                title="新建空分组"
+              >
+                <span className="text-muted-foreground text-sm font-medium">➕ 新建分组</span>
+              </button>
+            )}
+          </div>
+
+          <DragOverlay>
+            {activeDrag && activeTab ? (
+              <div className="card shadow-2xl border-primary/50">
+                <SortableTabRow
+                  gi={activeDrag.gi}
+                  tabIndex={activeDrag.tabIndex}
+                  tab={activeTab}
+                  editMode
+                  enriching={false}
+                  isDragging
+                  onActivate={() => {}}
+                  onCollect={() => {}}
+                  onClose={() => {}}
+                />
               </div>
-            );
-          })}
-        </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       )}
     </div>
   );
