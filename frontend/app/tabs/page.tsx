@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -241,6 +241,22 @@ export default function TabsPage() {
     gi: number;
     tabIndex: number;
   } | null>(null);
+  /**
+   * 拖拽悬停的"落点位置"（仅视觉占位，不修改数据）：
+   * - 悬停到某个 tab 之前：{ gi, beforeTabIndex }
+   * - 悬停到某个组的空白区（追加到组尾）：{ gi, insertAtEnd: true }
+   * - 无有效悬停：null
+   */
+  const [dragOverTarget, setDragOverTarget] = useState<
+    | { gi: number; beforeTabIndex: number; insertAtEnd?: undefined }
+    | { gi: number; insertAtEnd: true; beforeTabIndex?: undefined }
+    | null
+  >(null);
+  /** 拖拽中被拖走的 tab 所在位置（组内该位置显示占位而非原始行） */
+  const dragOverTargetRef = useRef(dragOverTarget);
+  useEffect(() => {
+    dragOverTargetRef.current = dragOverTarget;
+  }, [dragOverTarget]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
@@ -256,6 +272,131 @@ export default function TabsPage() {
   );
   /** 编辑模式 ref：事件监听器中读取最新值，决定是否忽略群组级事件 */
   const editModeRef = useRef(false);
+
+  // ---------- Masonry 布局：JS 驱动的最短列优先分配 ----------
+  // 用 callback ref（而非 useRef）是因为 masonry 容器在条件渲染内
+  // （{!loading && groups.length > 0}），首次 mount 时 ref 为 null，
+  // useEffect([]) 抓不到元素。callback ref 在 div 实际挂载时触发。
+  const [masonryEl, setMasonryEl] = useState<HTMLDivElement | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  useEffect(() => {
+    if (!masonryEl) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerWidth(entry.contentRect.width);
+      }
+    });
+    ro.observe(masonryEl);
+    // 首次手动触发一次，避免 ResizeObserver 首帧延迟
+    setContainerWidth(masonryEl.offsetWidth);
+    return () => ro.disconnect();
+  }, [masonryEl]);
+
+  /** 编辑模式下冻结的列分配（gi → 列索引），防止拖拽/新增分组时跳变 */
+  const giToColRef = useRef<{
+    assignments: number[];
+    colCount: number;
+    editMode: boolean;
+  }>({ assignments: [], colCount: 0, editMode: false });
+
+  const MIN_COL_WIDTH = 260;
+  const COL_GAP = 16;
+  const colCount = Math.max(1, Math.min(3, Math.floor((containerWidth + COL_GAP) / (MIN_COL_WIDTH + COL_GAP))));
+
+  /**
+   * 将分组按"最短列优先"分配到各列。
+   * 高度估算：header(64px) + 展开时 tab行数 × 60px + 内边距。
+   *
+   * 非编辑模式：每次 groups 变化都重新计算（动态瀑布流）。
+   * 编辑模式：冻结列分配——拖拽标签（tab_indices 变）不触发重排，
+   *   仅在分组增减时增量更新，避免分组跳变。
+   */
+  const masonryColumns = useMemo(() => {
+    const estimateHeight = (gi: number) => {
+      const expanded = expandedGroups.has(gi);
+      return 64 + (expanded ? groups[gi].tab_indices.length * 60 + 16 : 0);
+    };
+
+    const findShortestCol = (colHeights: number[]) => {
+      let shortest = 0;
+      for (let c = 1; c < colCount; c++) {
+        if (colHeights[c] < colHeights[shortest]) shortest = c;
+      }
+      return shortest;
+    };
+
+    const buildCols = (assignments: number[]) => {
+      const numCols = Math.max(1, colCount);
+      const cols: { group: TabGroup; originalGi: number }[][] = Array.from(
+        { length: numCols },
+        () => []
+      );
+      for (let gi = 0; gi < groups.length; gi++) {
+        const col = assignments[gi] ?? 0;
+        cols[col].push({ group: groups[gi], originalGi: gi });
+      }
+      return cols;
+    };
+
+    // 非编辑模式：动态计算
+    if (!editMode) {
+      const assignments = new Array(groups.length).fill(0);
+      if (colCount > 1) {
+        const colHeights = new Array(colCount).fill(0);
+        for (let gi = 0; gi < groups.length; gi++) {
+          const shortest = findShortestCol(colHeights);
+          assignments[gi] = shortest;
+          colHeights[shortest] += estimateHeight(gi) + COL_GAP;
+        }
+      }
+      return buildCols(assignments);
+    }
+
+    // 编辑模式：冻结列分配
+    const state = giToColRef.current;
+
+    // 需要全量重算：列数变化 / 首次 / 进出编辑模式
+    if (
+      state.colCount !== colCount ||
+      state.editMode !== editMode ||
+      state.assignments.length === 0 ||
+      state.assignments.length > groups.length
+    ) {
+      const assignments = new Array(groups.length).fill(0);
+      if (colCount > 1) {
+        const colHeights = new Array(colCount).fill(0);
+        for (let gi = 0; gi < groups.length; gi++) {
+          const shortest = findShortestCol(colHeights);
+          assignments[gi] = shortest;
+          colHeights[shortest] += estimateHeight(gi) + COL_GAP;
+        }
+      }
+      giToColRef.current = { assignments, colCount, editMode };
+      return buildCols(assignments);
+    }
+
+    // 新增分组：仅把新分组分配到最矮列，已有分组不动
+    if (groups.length > state.assignments.length) {
+      const colHeights = new Array(colCount).fill(0);
+      for (let gi = 0; gi < state.assignments.length; gi++) {
+        colHeights[state.assignments[gi]] += estimateHeight(gi) + COL_GAP;
+      }
+      const newAssignments = [...state.assignments];
+      for (let gi = state.assignments.length; gi < groups.length; gi++) {
+        const shortest = findShortestCol(colHeights);
+        newAssignments.push(shortest);
+        colHeights[shortest] += estimateHeight(gi) + COL_GAP;
+      }
+      giToColRef.current = { assignments: newAssignments, colCount, editMode };
+      return buildCols(newAssignments);
+    }
+
+    // 无结构变化（拖拽标签等）：保持冻结分配，使用最新 group 数据
+    return buildCols(state.assignments);
+  }, [groups, colCount, expandedGroups, editMode]);
+
+  /** 编辑模式下"新建分组"按钮应放在最后一列末尾 */
+  const newGroupTargetCol = Math.max(0, colCount - 1);
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
@@ -868,111 +1009,147 @@ export default function TabsPage() {
   }
 
   // ---------- 拖拽处理：组内排序 + 跨组移动 ----------
+  // 核心原则：拖拽过程（DragOver）只维护"落点视觉占位"，绝不修改 groups 数据。
+  // 只有当用户松开鼠标（DragEnd）时，才一次性执行实际的 tab 移动。
 
   function handleDragStart(event: DragStartEvent) {
     const parsed = parseTabDragId(String(event.active.id));
     if (!parsed) return;
     setActiveDrag(parsed);
+    setDragOverTarget(null);
   }
 
   function handleDragOver(event: DragOverEvent) {
-    // 跨组移动：实时把源 tab 插入到目标组的目标位置（或者在悬停到组容器时追加到组尾）
     const { active, over } = event;
     const src = parseTabDragId(String(active.id));
     if (!src) return;
-    if (!over) return;
 
-    const overId = String(over.id);
-    let targetGi: number;
-    let insertAtEnd = false;
-
-    const overTab = parseTabDragId(overId);
-    if (overTab) {
-      targetGi = overTab.gi;
-    } else if (overId.startsWith('group-')) {
-      const m = overId.match(/^group-(-?\d+)$/);
-      if (!m) return;
-      targetGi = Number(m[1]);
-      insertAtEnd = true;
-    } else {
+    if (!over) {
+      setDragOverTarget(null);
       return;
     }
 
+    const overId = String(over.id);
+    const overTab = parseTabDragId(overId);
+    if (overTab) {
+      // 悬停到某个 tab → 在该 tab 之前插入
+      setDragOverTarget((prev) => {
+        if (
+          prev &&
+          'beforeTabIndex' in prev &&
+          prev.gi === overTab.gi &&
+          prev.beforeTabIndex === overTab.tabIndex
+        ) {
+          return prev; // 与上次相同，避免重复 setState
+        }
+        return { gi: overTab.gi, beforeTabIndex: overTab.tabIndex };
+      });
+      return;
+    }
+
+    const m = overId.match(/^group-(-?\d+)$/);
+    if (m) {
+      // 悬停到组容器空白区 → 追加到组尾
+      const targetGi = Number(m[1]);
+      setDragOverTarget((prev) => {
+        if (prev && prev.insertAtEnd && prev.gi === targetGi) return prev;
+        return { gi: targetGi, insertAtEnd: true };
+      });
+      return;
+    }
+
+    setDragOverTarget(null);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    const src = parseTabDragId(String(active.id));
+    setActiveDrag(null);
+    setDragOverTarget(null);
+
+    if (!src || !over) return;
+
+    // 解析最终落点：优先用最终的 over，其次用记录的 dragOverTargetRef
+    const overId = String(over.id);
+    const overTab = parseTabDragId(overId);
+    const overGroupMatch = overId.match(/^group-(-?\d+)$/);
+
+    let finalTarget:
+      | { gi: number; beforeTabIndex: number; insertAtEnd?: undefined }
+      | { gi: number; insertAtEnd: true; beforeTabIndex?: undefined }
+      | null = null;
+
+    if (overTab) {
+      finalTarget = { gi: overTab.gi, beforeTabIndex: overTab.tabIndex };
+    } else if (overGroupMatch) {
+      finalTarget = { gi: Number(overGroupMatch[1]), insertAtEnd: true };
+    } else {
+      finalTarget = dragOverTargetRef.current;
+    }
+    if (!finalTarget) return;
+
     const srcGi = src.gi;
     const srcTabIndex = src.tabIndex;
+    const { gi: dstGi, insertAtEnd, beforeTabIndex } = finalTarget;
 
     setGroups((prev) => {
-      if (targetGi >= prev.length || srcGi >= prev.length) return prev;
-      if (!prev[srcGi].tab_indices.includes(srcTabIndex)) return prev;
-
-      if (srcGi === targetGi) {
-        // 同组：在 onDragEnd 里做排序（arrayMove 更精确），此处不处理
+      if (
+        srcGi >= prev.length ||
+        dstGi >= prev.length ||
+        !prev[srcGi].tab_indices.includes(srcTabIndex)
+      ) {
         return prev;
       }
 
-      // 跨组：先从源组移除，再插入到目标组
+      // 1. 先从源组中移除该 tab（注意：removeOnlyUsedForPosCalc）
       const srcGroup = prev[srcGi];
       const srcIndicesArr = [...srcGroup.tab_indices];
       const posInSrc = srcIndicesArr.indexOf(srcTabIndex);
       if (posInSrc === -1) return prev;
-      srcIndicesArr.splice(posInSrc, 1);
 
-      const dstGroup = prev[targetGi];
+      if (srcGi === dstGi) {
+        // —— 同组排序 ——
+        if (insertAtEnd) {
+          // 追加到组尾 → 如果本身就在最后一个位置，不动
+          if (posInSrc === srcIndicesArr.length - 1) return prev;
+          srcIndicesArr.splice(posInSrc, 1);
+          srcIndicesArr.push(srcTabIndex);
+          const next = [...prev];
+          next[srcGi] = { ...srcGroup, tab_indices: srcIndicesArr };
+          return next;
+        }
+        // 插到 beforeTabIndex 之前 → 用 arrayMove 精确排序
+        const targetPosInArr = srcIndicesArr.indexOf(beforeTabIndex as number);
+        if (targetPosInArr === -1) return prev;
+        if (posInSrc === targetPosInArr) return prev;
+        const moved = arrayMove(srcIndicesArr, posInSrc, targetPosInArr);
+        const next = [...prev];
+        next[srcGi] = { ...srcGroup, tab_indices: moved };
+        return next;
+      }
+
+      // —— 跨组移动：源组移除 + 目标组插入 ——
+      srcIndicesArr.splice(posInSrc, 1);
+      const dstGroup = prev[dstGi];
       let dstIndicesArr = [...dstGroup.tab_indices];
+
       if (insertAtEnd) {
         dstIndicesArr.push(srcTabIndex);
       } else {
-        const overParsed = parseTabDragId(overId);
-        if (!overParsed) {
+        const posInDst = dstIndicesArr.indexOf(beforeTabIndex as number);
+        if (posInDst === -1) {
           dstIndicesArr.push(srcTabIndex);
         } else {
-          const posInDst = dstIndicesArr.indexOf(overParsed.tabIndex);
-          if (posInDst === -1) {
-            dstIndicesArr.push(srcTabIndex);
-          } else {
-            dstIndicesArr.splice(posInDst, 0, srcTabIndex);
-          }
+          dstIndicesArr.splice(posInDst, 0, srcTabIndex);
         }
       }
 
       const next = [...prev];
       next[srcGi] = { ...srcGroup, tab_indices: srcIndicesArr };
-      next[targetGi] = { ...dstGroup, tab_indices: dstIndicesArr };
-      // 不删除空组：避免 gi 偏移导致 dnd-kit active/over id 映射错乱。
-      // 源组变空后保留，用户可手动「删除组」。
+      next[dstGi] = { ...dstGroup, tab_indices: dstIndicesArr };
+      // 不删除空组：避免 gi 偏移导致 dnd-kit id 映射错乱，用户可手动「删除组」
       return next;
     });
-  }
-
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    setActiveDrag(null);
-
-    const src = parseTabDragId(String(active.id));
-    if (!src || !over) return;
-
-    const overId = String(over.id);
-    if (overId.startsWith('group-')) return; // 已在 dragOver 中处理过"追加到组尾"
-
-    const dst = parseTabDragId(overId);
-    if (!dst) return;
-
-    // 同组排序（跨组已经在 dragOver 中处理，但 dragEnd 得到最终位置更准确）
-    if (src.gi === dst.gi) {
-      setGroups((prev) => {
-        if (src.gi >= prev.length) return prev;
-        const srcGroup = prev[src.gi];
-        const srcList = [...srcGroup.tab_indices];
-        const oldPos = srcList.indexOf(src.tabIndex);
-        const newPos = srcList.indexOf(dst.tabIndex);
-        if (oldPos === -1 || newPos === -1) return prev;
-        if (oldPos === newPos) return prev;
-        const moved = arrayMove(srcList, oldPos, newPos);
-        const next = [...prev];
-        next[src.gi] = { ...srcGroup, tab_indices: moved };
-        return next;
-      });
-    }
   }
 
   // ---------- 新增 / 删除分组 ----------
@@ -1055,20 +1232,20 @@ export default function TabsPage() {
                 {loading ? 'AI 分组中...' : '🤖 AI智能分组'}
               </button>
               <button
-                onClick={cancelEditMode}
-                disabled={loading}
-                className="button button-outline"
-                title="恢复编辑前的分组，退出编辑"
-              >
-                ✕ 取消编辑
-              </button>
-              <button
                 onClick={handleOrganizeTabs}
                 disabled={organizing || loading || groups.length === 0}
                 className="button button-primary"
                 title="同步当前分组到 Chrome 浏览器，并退出编辑"
               >
                 {organizing ? '同步中...' : '✨ 一键同步'}
+              </button>
+              <button
+                onClick={cancelEditMode}
+                disabled={loading}
+                className="button button-outline"
+                title="恢复编辑前的分组，退出编辑"
+              >
+                ✕ 取消编辑
               </button>
             </>
           ) : (
@@ -1078,7 +1255,7 @@ export default function TabsPage() {
               className="button button-outline"
               title="编辑：调整分组、AI 分组、同步到浏览器"
             >
-              ✏️ 编辑
+              ✏️ 编辑分组
             </button>
           )}
         </div>
@@ -1122,18 +1299,31 @@ export default function TabsPage() {
           onDragEnd={editMode ? handleDragEnd : undefined}
         >
           <div
-            className="grid gap-4 items-start"
+            ref={setMasonryEl}
             style={{
-              gridTemplateColumns:
-                'repeat(auto-fit, minmax(max(260px, 25%), 1fr))',
+              display: 'flex',
+              gap: `${COL_GAP}px`,
               maxWidth: '1400px',
             }}
           >
-            {groups.map((group, gi) => {
-              const expanded = expandedGroups.has(gi);
-              const isEditingName = editingGroupIdx === gi;
-              const groupColor = group.color || GROUP_COLORS[gi % GROUP_COLORS.length];
-              return (
+            {/* JS Masonry：最短列优先分配，每个分组插入当前最矮的列 */}
+            {masonryColumns.map((colItems, colIdx) => (
+              <div
+                key={`col-${colIdx}`}
+                style={{
+                  flex: '1 1 0',
+                  minWidth: `${MIN_COL_WIDTH}px`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: `${COL_GAP}px`,
+                }}
+              >
+                {colItems.map(({ group, originalGi: gi }) => {
+                  const expanded = expandedGroups.has(gi);
+                  const isEditingName = editingGroupIdx === gi;
+                  const groupColor =
+                    group.color || GROUP_COLORS[gi % GROUP_COLORS.length];
+                  return (
                 <div
                   key={gi}
                   className="card p-0"
@@ -1218,26 +1408,91 @@ export default function TabsPage() {
                         strategy={verticalListSortingStrategy}
                       >
                         <div className="divide-y divide-border/30">
-                          {group.tab_indices.map((ti) => {
-                            const tab = tabs[ti];
-                            if (!tab) return null;
-                            return (
-                              <SortableTabRow
-                                key={`${gi}-${ti}`}
-                                gi={gi}
-                                tabIndex={ti}
-                                tab={tab}
-                                editMode={editMode}
-                                enriching={enriching === ti}
-                                onActivate={() => handleActivateTab(tab.id)}
-                                onCollect={(type) => handleCollectToLearning(ti, type)}
-                                onClose={() => handleCloseTab(tab.id)}
-                              />
-                            );
-                          })}
+                          {(() => {
+                            // —— 带占位符的 tab 行渲染 ——
+                            // 关键：被拖拽的 tab 本体始终渲染（不跳过），由 dnd-kit 的
+                            // useSortable 自动设置 opacity:0.4 半透明，保证 SortableContext
+                            // 能正确计算其他 tab 的 transform，避免 UI 错乱。
+                            // 占位符仅在【跨组拖拽】时显示（目标组 ≠ 源组）；
+                            // 同组内排序由 dnd-kit 原生 transform 动画处理，无需占位符。
+                            const isSrcGroup = !!activeDrag && activeDrag.gi === gi;
+                            const isTargetGroup =
+                              !!dragOverTarget && dragOverTarget.gi === gi;
+                            // 同组拖拽：不显示占位，交给 dnd-kit 原生排序动画
+                            const showPlaceholder = isTargetGroup && !isSrcGroup;
+                            const beforeIdx =
+                              showPlaceholder && 'beforeTabIndex' in dragOverTarget!
+                                ? (dragOverTarget as { beforeTabIndex: number }).beforeTabIndex
+                                : null;
+                            const insertAtEndHere =
+                              showPlaceholder &&
+                              (dragOverTarget as { insertAtEnd?: boolean }).insertAtEnd === true;
+                            const out: JSX.Element[] = [];
+                            // 空目标组：直接显示占位
+                            if (group.tab_indices.length === 0 && showPlaceholder) {
+                              out.push(
+                                <div
+                                  key={`placeholder-${gi}-head`}
+                                  className="p-3 mx-3 my-1 rounded-md border-2 border-dashed border-primary/50 bg-primary/5"
+                                  style={{ minHeight: '52px' }}
+                                >
+                                  <span className="text-xs text-primary/70">  在此插入</span>
+                                </div>
+                              );
+                            }
+                            for (let k = 0; k < group.tab_indices.length; k++) {
+                              const ti = group.tab_indices[k];
+                              const tab = tabs[ti];
+                              // 若"在该 tab 之前插入占位"（仅跨组），先输出占位行
+                              if (beforeIdx === ti) {
+                                out.push(
+                                  <div
+                                    key={`placeholder-${gi}-before-${ti}`}
+                                    className="p-3 mx-2 my-1 rounded-md border-2 border-dashed border-primary/50 bg-primary/5"
+                                    style={{ minHeight: '52px' }}
+                                  >
+                                    <span className="text-xs text-primary/80 font-medium">
+                                      ↕ 在此插入
+                                    </span>
+                                  </div>
+                                );
+                              }
+                              // 被拖拽的 tab 本体也渲染（dnd-kit 会自动半透明），不跳过
+                              if (tab) {
+                                out.push(
+                                  <SortableTabRow
+                                    key={`${gi}-${ti}`}
+                                    gi={gi}
+                                    tabIndex={ti}
+                                    tab={tab}
+                                    editMode={editMode}
+                                    enriching={enriching === ti}
+                                    onActivate={() => handleActivateTab(tab.id)}
+                                    onCollect={(type) => handleCollectToLearning(ti, type)}
+                                    onClose={() => handleCloseTab(tab.id)}
+                                  />
+                                );
+                              }
+                            }
+                            // 若"追加到组尾"（仅跨组），在遍历结束后追加占位行
+                            if (insertAtEndHere && group.tab_indices.length > 0) {
+                              out.push(
+                                <div
+                                  key={`placeholder-${gi}-end`}
+                                  className="p-3 mx-2 my-1 rounded-md border-2 border-dashed border-primary/50 bg-primary/5"
+                                  style={{ minHeight: '52px' }}
+                                >
+                                  <span className="text-xs text-primary/80 font-medium">
+                                    ↕ 在此插入（组尾）
+                                  </span>
+                                </div>
+                              );
+                            }
+                            return out;
+                          })()}
                         </div>
                       </SortableContext>
-                      {group.tab_indices.length === 0 && (
+                      {group.tab_indices.length === 0 && !dragOverTarget && (
                         <div className="text-xs text-muted-foreground text-center py-3 border-t border-border/30">
                           {editMode ? '拖拽标签到此处加入该分组' : '暂无标签'}
                         </div>
@@ -1245,17 +1500,20 @@ export default function TabsPage() {
                     </GroupDropZone>
                   )}
                 </div>
-              );
-            })}
-            {editMode && (
-              <button
-                onClick={handleAddNewGroup}
-                className="card p-0 border-2 border-dashed border-border hover:border-primary hover:bg-primary/5 transition-colors flex items-center justify-center min-h-[120px] cursor-pointer"
-                title="新建空分组"
-              >
-                <span className="text-muted-foreground text-sm font-medium">➕ 新建分组</span>
-              </button>
-            )}
+                  );
+                })}
+                {/* 编辑模式：新建分组按钮放在最后一列末尾 */}
+                {editMode && colIdx === newGroupTargetCol && (
+                  <button
+                    onClick={handleAddNewGroup}
+                    className="card p-0 border-2 border-dashed border-border hover:border-primary hover:bg-primary/5 transition-colors flex items-center justify-center min-h-[120px] cursor-pointer"
+                    title="新建空分组"
+                  >
+                    <span className="text-muted-foreground text-sm font-medium">➕ 新建分组</span>
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
 
           <DragOverlay>
