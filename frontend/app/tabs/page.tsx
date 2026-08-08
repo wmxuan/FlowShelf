@@ -573,7 +573,7 @@ export default function TabsPage() {
     setEnriching(index);
     try {
       const content = await getTabContent(tab.id);
-      const res = await fetch(`${API_BASE}/api/learning`, {
+      const res = await fetch(`/api/learning`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1186,18 +1186,23 @@ export default function TabsPage() {
   }
 
   if (!bridgeAvailable) {
+    const currentHost = typeof window !== 'undefined' ? window.location.host : 'localhost:3000';
     return (
       <div className="max-w-2xl mx-auto text-center py-20">
         <div className="text-6xl mb-6">🔌</div>
         <h1 className="text-2xl font-bold mb-4">需要安装 FlowShelf 浏览器扩展</h1>
         <p className="text-muted-foreground mb-6">
-          Tab 管理功能需要通过 FlowShelf Chrome 扩展与浏览器通信。请先安装扩展后刷新此页面。
+          Tab 管理功能需要通过 FlowShelf Chrome 扩展与浏览器通信，管理的是<b>当前浏览器</b>中的标签页。
+          请先安装扩展后刷新此页面。
         </p>
-        <p className="text-sm text-muted-foreground">
-          如果你已安装扩展但仍看到此提示，请确保扩展已在
-          <code className="px-1 py-0.5 bg-muted rounded mx-1">localhost:3000</code>
-          上激活。
-        </p>
+        <div className="text-sm text-muted-foreground space-y-1">
+          <p>如果你已安装扩展但仍看到此提示，请检查：</p>
+          <p>1. 扩展的 Content Script 已在
+            <code className="px-1 py-0.5 bg-muted rounded mx-1">{currentHost}</code>
+            上激活
+          </p>
+          <p>2. 在 <code className="px-1 py-0.5 bg-muted rounded mx-1">chrome://extensions</code> 中重新加载扩展</p>
+        </div>
       </div>
     );
   }

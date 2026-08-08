@@ -3,6 +3,7 @@
   "name": "FlowShelf",
   "version": "0.1.0",
   "description": "AI 原生的个人数字资产管家 - 浏览器扩展",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr1xYvnJt6yD/uzO8PRJsEThiwbZlrWOXtayEobnCal7hnx6I/GUnLAFuoXKvXWImTewUHBLNWZcVpiun4VmUWEfmTHBVe8x7pBNkQij7u2a3mu7QSiRDqnaE0VOHOQ/sKcLbGPzSkuumJsVXPFYI3rm/xlExxV/zlcJTBPd3r7hcJ9Sd0/CQRTpk2AMexl0aFmwAls4wMYNdQG+EMZvc6ENFZVFWKeUvt459ltTRhskK+mFZF0yksdBp6XPYH9c/Vqpn5BG1UARA8qeaVaBWRYW9goxtdobEVh7qNJIMKZaoU27U4wOF5ZKAxx+adnPGei4OWGO1RXwvC5Qv+Sjy0wIDAQAB",
   "icons": {
     "16": "assets/icon512.png",
     "128": "assets/icon512.png",
@@ -20,11 +21,11 @@
   "chrome_url_overrides": {
     "newtab": "src/newtab/index.html"
   },
-  "permissions": ["storage", "tabs", "tabGroups", "activeTab", "contextMenus", "scripting", "bookmarks", "notifications"],
+  "permissions": ["storage", "tabs", "tabGroups", "activeTab", "contextMenus", "scripting", "bookmarks", "notifications", "nativeMessaging"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {
-      "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*", "https://*.flowshelf.app/*"],
+      "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*", "http://*:3000/*", "http://localhost:8972/*", "http://127.0.0.1:8972/*", "https://*.flowshelf.app/*"],
       "js": ["src/content/bridge.ts"],
       "run_at": "document_start"
     }

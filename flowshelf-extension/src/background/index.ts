@@ -9,9 +9,11 @@
  *    - 用户点 ⭐️ → Chrome 创建书签 → 扩展同步到 FlowShelf 待学习队列
  *    - 保留原生书签，不删除
  *    - 页面 toast 提示用户已收藏到暂存区
+ * 5. 自动启动后端（通过 Native Messaging 或端口探测）
  */
 
-import { getApiBase } from "@/lib/api";
+import { getApiBase, setApiBase, setWebBase, DEFAULT_API_BASE, DEFAULT_WEB_BASE } from "@/lib/api";
+import { startBackend, checkBackendStatus } from "@/native-host";
 
 const CONTEXT_MENU_ID = "flowshelf-collect";
 
@@ -26,14 +28,52 @@ const DEDUP_WINDOW_MS = 3000;
 const recentlySavedLearningUrls = new Map<string, number>();
 const RECENT_SAVED_WINDOW_MS = 60 * 1000;
 
-// 安装时创建右键菜单
-chrome.runtime.onInstalled.addListener(() => {
+// 扩展安装/更新时：自动启动后端 + 创建右键菜单
+chrome.runtime.onInstalled.addListener(async () => {
+  // 1. 创建右键菜单
   chrome.contextMenus.create({
     id: CONTEXT_MENU_ID,
     title: "📚 收藏到 FlowShelf",
     contexts: ["page"],
   });
+
+  // 2. 尝试通过 Native Messaging 启动后端
+  const result = await startBackend();
+  if (result.status === "ok" && result.port && result.url) {
+    await setApiBase(result.url);
+    await setWebBase(result.url);
+    console.log("[FlowShelf] Backend auto-started on port", result.port);
+  } else {
+    console.warn("[FlowShelf] Native Messaging start failed:", result.message);
+    // Fallback: 尝试探测已在运行的后端
+    await tryDetectBackend();
+  }
 });
+
+/**
+ * 探测已在运行的后端（Native Messaging 失败时的 fallback）
+ * 尝试 8972-8979 端口，命中 /api/health 即认为可用
+ */
+async function tryDetectBackend(): Promise<void> {
+  for (let port = 8972; port <= 8979; port++) {
+    try {
+      const res = await fetch(`http://localhost:${port}/api/health`, {
+        method: "GET",
+        signal: AbortSignal.timeout(1000),
+      });
+      if (res.ok) {
+        const url = `http://localhost:${port}`;
+        await setApiBase(url);
+        await setWebBase(url);
+        console.log("[FlowShelf] Detected backend on port", port);
+        return;
+      }
+    } catch {
+      /* not running on this port */
+    }
+  }
+  console.warn("[FlowShelf] No backend detected, using default");
+}
 
 // 右键菜单点击 → 打开弹窗
 chrome.contextMenus.onClicked.addListener(async (info, _tab) => {
@@ -224,11 +264,28 @@ async function openPopup(): Promise<void> {
 // Content Script 无法直接访问 chrome.tabs.*，由 Background SW 中继。
 // 同时监听标签事件，转发给 Web 应用页面的 Content Script。
 
-const WEB_APP_URL_PATTERNS = [
+// 默认 URL 匹配模式（开发环境 localhost:3000 + 生产环境 flowshelf.app）
+const DEFAULT_WEB_APP_URL_PATTERNS = [
   "http://localhost:3000/*",
   "http://127.0.0.1:3000/*",
+  "http://localhost:8972/*",
+  "http://127.0.0.1:8972/*",
   "https://*.flowshelf.app/*",
 ];
+
+/**
+ * 获取 Web 应用 URL 匹配模式（动态读取 storage 中的 web base）
+ */
+async function getWebAppUrlPatterns(): Promise<string[]> {
+  const { flowshelf_web_base } = await chrome.storage.local.get(["flowshelf_web_base"]);
+  const webBase = flowshelf_web_base as string | undefined;
+  if (!webBase) return DEFAULT_WEB_APP_URL_PATTERNS;
+  // 将 http://localhost:8972 转为 http://localhost:8972/*
+  const pattern = webBase.endsWith("/*") ? webBase : `${webBase}/*`;
+  // 去重：自定义 pattern + 默认 patterns
+  const all = [pattern, ...DEFAULT_WEB_APP_URL_PATTERNS];
+  return [...new Set(all)];
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type !== "bridge-action") return;
@@ -437,8 +494,9 @@ async function handleBridgeAction(
 }
 
 /** 将标签事件转发给 Web 应用页面的 Content Script */
-function forwardTabEvent(eventType: string, tabData: unknown): void {
-  chrome.tabs.query({ url: WEB_APP_URL_PATTERNS }).then((tabs) => {
+async function forwardTabEvent(eventType: string, tabData: unknown): Promise<void> {
+  const patterns = await getWebAppUrlPatterns();
+  chrome.tabs.query({ url: patterns }).then((tabs) => {
     for (const tab of tabs) {
       if (tab.id) {
         chrome.tabs
@@ -501,11 +559,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // 群组创建/改名/解散 → 转发为 groupEvent，Web 应用同步分组名称与归属
 
 /** 将群组事件转发给 Web 应用页面的 Content Script */
-function forwardGroupEvent(
+async function forwardGroupEvent(
   eventType: "created" | "updated" | "removed",
   group: chrome.tabGroups.TabGroup
-): void {
-  chrome.tabs.query({ url: WEB_APP_URL_PATTERNS }).then((tabs) => {
+): Promise<void> {
+  const patterns = await getWebAppUrlPatterns();
+  chrome.tabs.query({ url: patterns }).then((tabs) => {
     for (const tab of tabs) {
       if (tab.id) {
         chrome.tabs
