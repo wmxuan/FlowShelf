@@ -1,4 +1,4 @@
-import type { Card, Tool, SearchResponse, TagCount } from '@/types';
+import type { Card, Tool, SearchResponse, TagCount, LearningItem, LearningConvertResult } from '@/types';
 
 // API 基础配置
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -151,4 +151,43 @@ export const searchApi = {
 // 健康检查
 export const healthApi = {
   check: () => apiRequest('/health'),
+};
+
+// 待学习队列 API
+export const learningApi = {
+  create: (
+    url: string,
+    title: string,
+    itemType: 'unspecified' | 'article' | 'tool' = 'unspecified',
+    content?: string
+  ) => {
+    const body: Record<string, unknown> = { source_url: url, title, item_type: itemType };
+    if (content) body.content = content;
+    return apiRequest<LearningItem>('/learning', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  list: () => apiRequest<LearningItem[]>('/learning'),
+
+  get: (id: number) => apiRequest<LearningItem>(`/learning/${id}`),
+
+  delete: (id: number) =>
+    apiRequest(`/learning/${id}`, { method: 'DELETE' }),
+
+  enrich: (id: number) =>
+    apiRequest<LearningItem>(`/learning/${id}/enrich`, { method: 'POST' }),
+
+  convert: (id: number, overwrite: Partial<{
+    item_type: 'article' | 'tool';
+    ai_summary: string;
+    key_points: string[];
+    ai_tags: string[];
+    tool_description: string;
+  }> = {}) =>
+    apiRequest<LearningConvertResult>(`/learning/${id}/convert`, {
+      method: 'POST',
+      body: JSON.stringify(overwrite),
+    }),
 };

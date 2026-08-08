@@ -1,10 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Wrench, Tag, Clock, Eye, Trash2, ExternalLink, Search, X, Plus } from 'lucide-react';
-import { toolsApi, searchApi } from '@/services/api';
-import AddToolModal from '@/components/AddToolModal';
+import { useState } from 'react';
+import { Wrench, Eye, Clock, Trash2, ExternalLink, Search, Plus } from 'lucide-react';
+import { toolsApi } from '@/services/api';
+import AddItemModal from '@/components/AddItemModal';
 import DeleteConfirmButton from '@/components/DeleteConfirmButton';
+import SearchBar, { SearchStatus } from '@/components/SearchBar';
+import TagFilter from '@/components/TagFilter';
+import { EmptyState, ListRowSkeleton } from '@/components/StateDisplays';
+import { useListPage } from '@/hooks/useListPage';
 import type { Tool, SearchResult, TagCount } from '@/types';
 
 // SearchResult → Tool 适配层：搜索态用 searchApi 返回的 SearchResult 渲染工具列表，
@@ -22,82 +26,38 @@ const adaptSearchResultToTool = (r: SearchResult): Tool => ({
 });
 
 export default function ToolboxPage() {
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [activeTag, setActiveTag] = useState<string | null>(null);
-  const [allTags, setAllTags] = useState<TagCount[]>([]);
-  const [sortBy, setSortBy] = useState('created_at');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showAllTags, setShowAllTags] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchInput, setSearchInput] = useState('');
+  const [sortBy, setSortBy] = useState('created_at');
 
-  const isSearching = searchQuery.trim().length > 0;
+  // toolbox 额外依赖 sortBy：变化时需要重新 fetch（useListPage extraDeps）
+  const list = useListPage<Tool, { tag?: string; query?: string; sortBy?: string }>({
+    fetchList: (opts) =>
+      toolsApi.list({
+        limit: 50,
+        tag: opts.tag,
+        sort_by: opts.sortBy || sortBy,
+      }),
+    fetchTags: toolsApi.tags as () => Promise<TagCount[]>,
+    adaptSearchResult: adaptSearchResultToTool,
+    deleteItem: async (id) => { await toolsApi.delete(id); },
+    searchType: 'tools',
+    extraDeps: [sortBy],
+  });
 
-  // 搜索态走 searchApi（混合检索，忽略 sort_by/tag），非搜索态走 toolsApi.list
-  const fetchTools = async () => {
-    setIsLoading(true);
-    try {
-      if (isSearching) {
-        const resp = await searchApi.semantic(searchQuery.trim(), 'tools', 50);
-        setTools(resp.results.map(adaptSearchResultToTool));
-      } else {
-        const data = await toolsApi.list({
-          limit: 50,
-          tag: activeTag || undefined,
-          sort_by: sortBy,
-        });
-        setTools(data);
-      }
-    } catch (err) {
-      console.error('获取工具失败:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const fetchTags = async () => {
-    try {
-      const data = await toolsApi.tags();
-      setAllTags(data);
-    } catch (err) {
-      console.error('获取标签失败:', err);
-    }
-  };
-
-  // 搜索优先：有搜索词走 searchApi（忽略标签/排序），无搜索词走标签+排序
-  useEffect(() => {
-    fetchTools();
-  }, [activeTag, sortBy, searchQuery]);
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSearchQuery(searchInput);
-  };
-
-  const clearSearch = () => {
-    setSearchInput('');
-    setSearchQuery('');
-  };
-
-  useEffect(() => {
-    fetchTags();
-  }, []);
-
-  const handleDelete = async (id: number) => {
-    try {
-      await toolsApi.delete(id);
-      fetchTools();
-      fetchTags();
-    } catch (err) {
-      console.error('删除失败:', err);
-    }
-  };
+  const {
+    items: tools,
+    isLoading,
+    searchInput, setSearchInput, searchQuery, setSearchQuery, isSearching,
+    clearSearch,
+    allTags, activeTag, setActiveTag,
+    handleDelete, refresh, refreshTags,
+  } = list;
 
   const handleVisit = async (id: number) => {
     try {
       await toolsApi.visit(id);
-      fetchTools();
+      // 访问后刷新（更新访问计数）——不影响搜索/标签上下文
+      await refresh();
     } catch (err) {
       console.error('记录访问失败:', err);
     }
@@ -116,90 +76,36 @@ export default function ToolboxPage() {
             已收藏 {tools.length} 个工具，AI 自动打标签 + 行为排序
           </p>
         </div>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="button button-primary"
-        >
+        <button onClick={() => setShowAddModal(true)} className="button button-primary">
           <Plus className="mr-2 h-4 w-4" />
           添加工具
         </button>
       </div>
 
       {/* 搜索框 */}
-      <form onSubmit={handleSearchSubmit} className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-          <input
-            type="text"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="在工具箱中搜索（标题 / 标签 / 描述）"
-            className="input pl-9 pr-9"
-          />
-          {searchInput && (
-            <button
-              type="button"
-              onClick={clearSearch}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 hover:bg-muted transition-colors"
-              title="清除搜索"
-            >
-              <X className="h-4 w-4 text-muted-foreground" />
-            </button>
-          )}
-        </div>
-        <button type="submit" className="button button-primary" disabled={!searchInput.trim()}>
-          搜索
-        </button>
-      </form>
+      <SearchBar
+        placeholder="在工具箱中搜索（标题 / 标签 / 描述）"
+        searchQuery={searchQuery}
+        searchInput={searchInput}
+        onInputChange={setSearchInput}
+        onSubmit={(val) => setSearchQuery(val)}
+        onClear={clearSearch}
+      />
 
       {/* 搜索状态提示 */}
       {isSearching && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>
-            搜索「<span className="font-medium text-foreground">{searchQuery}</span>」
-            找到 {tools.length} 个工具
-          </span>
-          <button onClick={clearSearch} className="badge badge-secondary hover:bg-muted">
-            清除搜索
-          </button>
-        </div>
+        <SearchStatus searchQuery={searchQuery} resultCount={tools.length} onClear={clearSearch} unit="个工具" />
       )}
 
-      {/* 筛选和排序（搜索时隐藏，搜索优先） */}
+      {/* 筛选和排序（搜索时隐藏，搜索优先）*/}
       {!isSearching && (
         <div className="flex flex-wrap items-center gap-4">
-          {allTags.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-muted-foreground flex items-center gap-1">
-                <Tag className="h-4 w-4" />
-                筛选：
-              </span>
-              <button
-                onClick={() => setActiveTag(null)}
-                className={`badge ${!activeTag ? 'badge-primary' : 'badge-secondary'}`}
-              >
-                全部
-              </button>
-              {(showAllTags ? allTags : allTags.slice(0, 15)).map((t) => (
-                <button
-                  key={t.name}
-                  onClick={() => setActiveTag(t.name === activeTag ? null : t.name)}
-                  className={`badge ${t.name === activeTag ? 'badge-primary' : 'badge-secondary'}`}
-                >
-                  {t.name}
-                  <span className="ml-1 opacity-60">{t.count}</span>
-                </button>
-              ))}
-              {allTags.length > 15 && (
-                <button
-                  onClick={() => setShowAllTags(!showAllTags)}
-                  className="badge badge-secondary"
-                >
-                  {showAllTags ? '收起' : `+${allTags.length - 15} 更多`}
-                </button>
-              )}
-            </div>
-          )}
+          <TagFilter
+            allTags={allTags as TagCount[]}
+            activeTag={activeTag}
+            onTagChange={setActiveTag}
+            label="筛选："
+          />
 
           <div className="flex items-center gap-2 ml-auto">
             <span className="text-sm font-medium text-muted-foreground">排序：</span>
@@ -218,42 +124,15 @@ export default function ToolboxPage() {
 
       {/* 工具列表 - 紧凑列表布局 */}
       {isLoading ? (
-        <div className="space-y-2">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <div
-              key={i}
-              className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 animate-pulse"
-            >
-              <div className="h-8 w-8 bg-muted rounded-md shrink-0" />
-              <div className="flex-1 space-y-1.5">
-                <div className="h-4 w-1/3 bg-muted rounded" />
-                <div className="h-3 w-1/4 bg-muted rounded" />
-              </div>
-              <div className="flex gap-1">
-                <div className="h-5 w-12 bg-muted rounded-full" />
-                <div className="h-5 w-12 bg-muted rounded-full" />
-              </div>
-            </div>
-          ))}
-        </div>
+        <ListRowSkeleton rows={5} />
       ) : tools.length === 0 ? (
-        <div className="card text-center py-12">
-          <div className="mx-auto mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-            {isSearching ? (
-              <Search className="h-8 w-8 text-primary" />
-            ) : (
-              <Wrench className="h-8 w-8 text-primary" />
-            )}
-          </div>
-          <h3 className="text-lg font-semibold mb-2">
-            {isSearching ? '没有匹配的工具' : '工具箱是空的'}
-          </h3>
-          <p className="text-muted-foreground">
-            {isSearching
-              ? '换个关键词试试，或清除搜索查看全部工具'
-              : '点击"添加工具"按钮收藏第一个常用工具'}
-          </p>
-        </div>
+        <EmptyState
+          icon={isSearching ? <Search className="h-8 w-8 text-primary" /> : <Wrench className="h-8 w-8 text-primary" />}
+          title={isSearching ? '没有匹配的工具' : '工具箱是空的'}
+          description={isSearching
+            ? '换个关键词试试，或清除搜索查看全部工具'
+            : '点击"添加工具"按钮收藏第一个常用工具'}
+        />
       ) : (
         <div className="space-y-2">
           {tools.map((tool) => {
@@ -284,7 +163,6 @@ export default function ToolboxPage() {
                       height={20}
                       className="h-5 w-5 rounded-sm"
                       onError={(e) => {
-                        // 加载失败时隐藏 img，显示备用 Wrench 图标
                         (e.currentTarget as HTMLImageElement).style.display = 'none';
                         const sibling = (e.currentTarget.parentElement?.querySelector('.fallback-icon')) as HTMLElement | null;
                         if (sibling) sibling.style.display = 'block';
@@ -319,9 +197,7 @@ export default function ToolboxPage() {
                 {/* 标签 */}
                 <div className="hidden sm:flex shrink-0 items-center gap-1">
                   {(tool.ai_tags || []).slice(0, 3).map((tag, i) => (
-                    <span key={i} className="badge badge-secondary text-xs">
-                      {tag}
-                    </span>
+                    <span key={i} className="badge badge-secondary text-xs">{tag}</span>
                   ))}
                 </div>
 
@@ -367,13 +243,11 @@ export default function ToolboxPage() {
       )}
 
       {/* 添加工具弹窗 */}
-      <AddToolModal
+      <AddItemModal
+        kind="tool"
         open={showAddModal}
         onClose={() => setShowAddModal(false)}
-        onCreated={() => {
-          fetchTools();
-          fetchTags();
-        }}
+        onCreated={() => { refresh(); refreshTags(); }}
       />
     </div>
   );
