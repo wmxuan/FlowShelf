@@ -7,7 +7,7 @@
 - 无 embedding 或维度不匹配的老数据降级为纯关键词
 
 权重：向量 × 0.7 + 关键词 × 0.3
-阈值：向量分数 ≥ 0.3 或关键词匹配，才进入结果集
+阈值：向量分数 ≥ 0.5 或关键词匹配，才进入结果集
 """
 
 import logging
@@ -32,7 +32,9 @@ class SearchService:
     VECTOR_WEIGHT = 0.7
     KEYWORD_WEIGHT = 0.3
     # 向量最低阈值：低于此值且关键词也无匹配时不返回，避免噪声
-    MIN_VEC_THRESHOLD = 0.3
+    # 0.3 对中文短查询偏低（"快看看"等泛化短语会与大量弱相关内容产生 0.3~0.5 相似度，
+    # 导致召回率拉满但精度崩盘）。0.5 在 bge 中文模型上接近"明显相关"的分界线。
+    MIN_VEC_THRESHOLD = 0.5
 
     def __init__(self, db: AsyncSession, ai_provider: BaseAIProvider):
         self.db = db
