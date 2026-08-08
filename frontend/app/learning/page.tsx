@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Trash2,
   Clock,
+  Shuffle,
 } from 'lucide-react';
 import DeleteConfirmButton from '@/components/DeleteConfirmButton';
 
@@ -30,24 +31,22 @@ interface LearningItem {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
 
-type TabKey = 'article' | 'tool';
+type TabKey = 'unspecified' | 'article' | 'tool';
 
 export default function LearningPage() {
   const [items, setItems] = useState<LearningItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [converting, setConverting] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>('article');
+  // key = `${id}` 或 `${id}-${overrideType}`
+  const [converting, setConverting] = useState<Record<string, boolean>>({});
+  const [activeTab, setActiveTab] = useState<TabKey>('unspecified');
 
   const loadItems = async (silent = false) => {
-    // silent=true 时轮询静默刷新：不触发 loading，避免列表被 spinner 替换导致
-    // 用户看不到 AI 识别结果的实时更新（只更新数据，UI 平滑过渡）
     if (!silent) setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/learning`);
       if (!res.ok) throw new Error(`加载失败: ${res.status}`);
       const data = await res.json();
-      // 安全处理 null 字段
       const safeData = (Array.isArray(data) ? data : []).map((item: LearningItem) => ({
         ...item,
         key_points: Array.isArray(item.key_points) ? item.key_points : [],
@@ -65,9 +64,15 @@ export default function LearningPage() {
     loadItems();
   }, []);
 
-  // 如果有 AI 未就绪的条目，每 5 秒轮询一次，直到全部就绪
+  // 如果有 AI 未就绪且类型已明确的条目，每 5 秒轮询一次
+  // unspecified 条目不会被后台 AI 处理，不必轮询（节省资源）
   useEffect(() => {
-    const hasPending = items.some((i) => !i.is_ready && !i.is_converted);
+    const hasPending = items.some(
+      (i) =>
+        !i.is_ready &&
+        !i.is_converted &&
+        i.item_type !== 'unspecified'
+    );
     if (!hasPending) return;
     const timer = setTimeout(() => {
       loadItems(true);
@@ -75,13 +80,15 @@ export default function LearningPage() {
     return () => clearTimeout(timer);
   }, [items]);
 
-  const handleConvert = async (id: number) => {
-    setConverting(id);
+  const handleConvert = async (id: number, overrideType?: 'article' | 'tool') => {
+    const key = overrideType ? `${id}-${overrideType}` : `${id}`;
+    setConverting((prev) => ({ ...prev, [key]: true }));
     try {
       const item = items.find((i) => i.id === id);
       if (!item) return;
 
       const body: Record<string, unknown> = {};
+      if (overrideType) body.item_type = overrideType;
       if (item.ai_summary) body.ai_summary = item.ai_summary;
       if (item.key_points && item.key_points.length > 0) body.key_points = item.key_points;
       if (item.ai_tags && item.ai_tags.length > 0) body.ai_tags = item.ai_tags;
@@ -100,7 +107,11 @@ export default function LearningPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : '转换失败');
     } finally {
-      setConverting(null);
+      setConverting((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     }
   };
 
@@ -142,13 +153,109 @@ export default function LearningPage() {
     });
   };
 
-  // 按类型分桶：article → 知识卡片 tab，tool → 工具 tab
-  const articleItems = items.filter((i) => i.item_type !== 'tool');
+  // 按类型分桶：严格三态区分，unspecified 不混入 article
+  const unspecifiedItems = items.filter((i) => i.item_type === 'unspecified');
+  const articleItems = items.filter((i) => i.item_type === 'article');
   const toolItems = items.filter((i) => i.item_type === 'tool');
-  const tabItems = activeTab === 'article' ? articleItems : toolItems;
+  const tabItems: LearningItem[] =
+    activeTab === 'unspecified'
+      ? unspecifiedItems
+      : activeTab === 'article'
+        ? articleItems
+        : toolItems;
 
+  const unspecifiedPendingCount = unspecifiedItems.filter((i) => !i.is_converted).length;
   const articlePendingCount = articleItems.filter((i) => !i.is_ready && !i.is_converted).length;
   const toolPendingCount = toolItems.filter((i) => !i.is_ready && !i.is_converted).length;
+
+  const renderUnspecifiedCard = (item: LearningItem) => {
+    const articleKey = `${item.id}-article`;
+    const toolKey = `${item.id}-tool`;
+    const busyArticle = !!converting[articleKey];
+    const busyTool = !!converting[toolKey];
+    let domain = '';
+    try {
+      domain = new URL(item.source_url).hostname;
+    } catch {}
+    return (
+      <div
+        key={item.id}
+        className="rounded-lg border border-border bg-card p-4 hover:border-purple-300 hover:shadow-sm transition-all"
+      >
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <h3 className="font-semibold text-sm line-clamp-2 flex-1">{item.title}</h3>
+          <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-700 px-2 py-0.5 text-xs">
+            <Shuffle className="h-3 w-3" />
+            待分类
+          </span>
+        </div>
+        <a
+          href={item.source_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-muted-foreground hover:text-primary truncate block mb-3"
+        >
+          {item.source_url}
+        </a>
+
+        {/* 待分类提示：AI 暂未生成，等用户选择类型后同步生成 */}
+        <div className="rounded-lg bg-purple-50 border border-purple-200 px-3 py-2 mb-3">
+          <div className="text-xs text-purple-700">
+            🗂️ 尚未选择归档类型，转正时 AI 会按所选类型同步生成内容
+          </div>
+        </div>
+
+        {/* 通用标签兜底展示（即便 unspecified 也可能用户未来手动编辑——此处不渲染空标签，省区域） */}
+
+        {item.is_converted && (
+          <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 mb-3">
+            <div className="text-xs text-green-700">
+              ✅ 已转为{item.item_type === 'tool' ? '工具' : '卡片'}
+              {item.converted_id && ` #${item.converted_id}`}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <Calendar className="h-3 w-3" />
+            {formatDate(item.created_at)}
+            {domain ? <span className="opacity-60">· {domain}</span> : null}
+          </span>
+          <div className="flex items-center gap-2">
+            {!item.is_converted && (
+              <>
+                <button
+                  onClick={() => handleConvert(item.id, 'article')}
+                  disabled={busyArticle || busyTool}
+                  className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  title="以知识卡片形式转正"
+                >
+                  {busyArticle ? '...' : '📄 转为知识卡片'}
+                </button>
+                <button
+                  onClick={() => handleConvert(item.id, 'tool')}
+                  disabled={busyArticle || busyTool}
+                  className="text-xs px-3 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 transition-colors disabled:opacity-50"
+                  title="以工具形式转正"
+                >
+                  {busyTool ? '...' : '🔧 转为工具'}
+                </button>
+              </>
+            )}
+            <DeleteConfirmButton
+              onConfirm={() => handleDelete(item.id)}
+              buttonClassName="text-xs px-2 py-1 rounded border border-border hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
+              buttonTitle="删除"
+              confirmText="确认删除这个条目吗？"
+            >
+              删除
+            </DeleteConfirmButton>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -176,8 +283,16 @@ export default function LearningPage() {
         </div>
       )}
 
-      {/* Tab 切换：知识卡片 / 工具 */}
+      {/* Tab 切换：待分类 / 知识卡片 / 工具 */}
       <div className="flex items-center gap-1 border-b border-border">
+        <TabButton
+          active={activeTab === 'unspecified'}
+          onClick={() => setActiveTab('unspecified')}
+          icon={<Shuffle className="h-4 w-4" />}
+          label="待分类"
+          count={unspecifiedItems.length}
+          pending={unspecifiedPendingCount}
+        />
         <TabButton
           active={activeTab === 'article'}
           onClick={() => setActiveTab('article')}
@@ -206,19 +321,35 @@ export default function LearningPage() {
       {!loading && tabItems.length === 0 && (
         <div className="text-center py-16 text-muted-foreground">
           <div className="text-4xl mb-3">
-            {activeTab === 'article' ? '📭' : '🧰'}
+            {activeTab === 'unspecified'
+              ? '🗂️'
+              : activeTab === 'article'
+                ? '📭'
+                : '🧰'}
           </div>
           <p>
-            {activeTab === 'article'
-              ? '暂存区还没有知识类内容'
-              : '暂存区还没有工具类内容'}
+            {activeTab === 'unspecified'
+              ? '暂无需分类的内容'
+              : activeTab === 'article'
+                ? '暂存区还没有知识类内容'
+                : '暂存区还没有工具类内容'}
           </p>
           <p className="text-sm mt-2">
-            点击浏览器扩展图标，快速收藏{activeTab === 'article' ? '文章' : '工具'}到这里
+            {activeTab === 'unspecified'
+              ? '通过⭐️书签或 FlowShelf 书签小按钮收藏的内容会出现在这里，等你选择归档类型'
+              : `点击浏览器扩展图标，快速收藏${activeTab === 'article' ? '文章' : '工具'}到这里`}
           </p>
         </div>
       )}
 
+      {/* 待分类 tab：列表视图 + 双按钮 */}
+      {!loading && tabItems.length > 0 && activeTab === 'unspecified' && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {tabItems.map((item) => renderUnspecifiedCard(item))}
+        </div>
+      )}
+
+      {/* 知识卡片 tab：原卡片布局，保持单按钮 */}
       {!loading && tabItems.length > 0 && activeTab === 'article' && (
         <div className="grid gap-4 md:grid-cols-2">
           {tabItems.map((item) => (
@@ -307,10 +438,10 @@ export default function LearningPage() {
                     {!item.is_converted && (
                       <button
                         onClick={() => handleConvert(item.id)}
-                        disabled={converting === item.id}
+                        disabled={!!converting[`${item.id}`]}
                         className="text-xs px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                       >
-                        {converting === item.id ? '转换中...' : '转为正式'}
+                        {converting[`${item.id}`] ? '转换中...' : '转为正式'}
                       </button>
                     )}
                     <DeleteConfirmButton
@@ -329,10 +460,10 @@ export default function LearningPage() {
         </div>
       )}
 
+      {/* 工具 tab：原工具列表，保持单按钮 */}
       {!loading && tabItems.length > 0 && activeTab === 'tool' && (
         <div className="space-y-2">
           {tabItems.map((item) => {
-            // 从 URL 提取域名用于获取 favicon
             let domain = '';
             try {
               domain = new URL(item.source_url).hostname;
@@ -348,7 +479,6 @@ export default function LearningPage() {
                 key={item.id}
                 className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 hover:border-primary/30 hover:shadow-sm transition-all"
               >
-                {/* favicon */}
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/50">
                   {faviconUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -371,7 +501,6 @@ export default function LearningPage() {
                   />
                 </div>
 
-                {/* 标题 + 域名 */}
                 <div className="min-w-0 flex-1">
                   <a
                     href={item.source_url}
@@ -389,7 +518,6 @@ export default function LearningPage() {
                   )}
                 </div>
 
-                {/* AI 状态徽标 */}
                 {!item.is_ready && (
                   <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-xs">
                     <span className="animate-pulse">⏳</span>
@@ -397,7 +525,6 @@ export default function LearningPage() {
                   </span>
                 )}
 
-                {/* 已转换徽标 */}
                 {item.is_converted && (
                   <span className="shrink-0 inline-flex items-center rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-xs">
                     ✅ 已转工具
@@ -405,7 +532,6 @@ export default function LearningPage() {
                   </span>
                 )}
 
-                {/* 标签 */}
                 <div className="hidden sm:flex shrink-0 items-center gap-1">
                   {(item.ai_tags || []).slice(0, 3).map((tag, i) => (
                     <span key={i} className="badge badge-secondary text-xs">
@@ -414,13 +540,11 @@ export default function LearningPage() {
                   ))}
                 </div>
 
-                {/* 时间 */}
                 <span className="hidden lg:flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                   <Clock className="h-3.5 w-3.5" />
                   {formatDate(item.created_at)}
                 </span>
 
-                {/* 操作按钮 - 默认显示 */}
                 <div className="flex shrink-0 items-center gap-1">
                   {!item.is_ready && (
                     <button
@@ -434,11 +558,11 @@ export default function LearningPage() {
                   {!item.is_converted && (
                     <button
                       onClick={() => handleConvert(item.id)}
-                      disabled={converting === item.id}
+                      disabled={!!converting[`${item.id}`]}
                       className="text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                       title="转为正式工具"
                     >
-                      {converting === item.id ? '...' : '转为正式'}
+                      {converting[`${item.id}`] ? '...' : '转为正式'}
                     </button>
                   )}
                   <a

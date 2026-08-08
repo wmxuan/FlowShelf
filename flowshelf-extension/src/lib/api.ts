@@ -212,11 +212,17 @@ export const tabsApi = {
 // ============ 待学习队列（快速收藏） ============
 
 export const learningApi = {
-  /** 快速保存到待学习队列（AI 后台异步补全） */
+  /** 快速保存到待学习队列（AI 后台异步补全）。
+   *
+   * item_type:
+   *   - "article" / "tool"：AI 会按该类型在后台立即生成对应内容
+   *   - "unspecified"：跳过后台 AI 生成，等用户在暂存区选择归档类型后，
+   *     转正时同步生成对应类型内容（适用于扩展 popup 不显示类型 UI 的一键入口）
+   */
   create: (
     source_url: string,
     title: string,
-    item_type: "article" | "tool" = "article",
+    item_type: "article" | "tool" | "unspecified" = "article",
     content?: string
   ) =>
     request<LearningItem>("/learning", {

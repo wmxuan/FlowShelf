@@ -656,6 +656,28 @@
   color: #dc2626;
 }
 
+.fs-tab-group-item-collect {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.fs-tab-group-item-collect:hover {
+  background: #dbeafe;
+  opacity: 1;
+}
+
+.fs-tab-group-item-collect:disabled {
+  opacity: 0.3;
+  cursor: wait;
+}
+
 .fs-tab-group-actions {
   display: flex;
   gap: 4px;
@@ -731,4 +753,69 @@
 
 .fs-tab-regen:hover {
   background: #eef2ff;
+}
+
+/* ============ 三选项菜单（卡片库 / 工具箱 / 设置） ============ */
+
+.fs-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fs-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.fs-menu-btn:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #c7d2fe;
+}
+
+.fs-menu-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.fs-menu-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.fs-menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fs-menu-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.fs-menu-desc {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.fs-menu-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #dc2626;
+  text-align: center;
+  word-break: break-word;
+  line-height: 1.5;
 }

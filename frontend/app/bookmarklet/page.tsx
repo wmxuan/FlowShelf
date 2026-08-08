@@ -25,16 +25,47 @@ export default function BookmarkletPage() {
       return;
     }
 
-    cardsApi
-      .create(url)
-      .then((c) => {
-        setCard(c);
-        setStatus('success');
-      })
-      .catch((e: Error) => {
-        setErrorMsg(e.message || '收藏失败');
-        setStatus('error');
-      });
+    let settled = false;
+
+    const doCreate = (content?: string) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', handleMessage);
+      clearTimeout(timer);
+      cardsApi
+        .create(url, undefined, content)
+        .then((c) => {
+          setCard(c);
+          setStatus('success');
+        })
+        .catch((e: Error) => {
+          setErrorMsg(e.message || '收藏失败');
+          setStatus('error');
+        });
+    };
+
+    // 接收 Bookmarklet（opener）预提取的正文：e.source === window.opener 限定来源
+    const handleMessage = (e: MessageEvent) => {
+      if (e.source !== window.opener) return;
+      if (!e.data || e.data.type !== 'flowshelf:content') return;
+      const content =
+        typeof e.data.content === 'string' && e.data.content.trim()
+          ? e.data.content
+          : undefined;
+      doCreate(content);
+    };
+    window.addEventListener('message', handleMessage);
+
+    // 主动向 opener 请求内容（opener 来源未知，用 '*' 投递）
+    window.opener?.postMessage({ type: 'flowshelf:requestContent' }, '*');
+
+    // 超时兜底：opener 未回内容（被关闭 / 跨域 / 非书签入口），降级走服务端抓取
+    const timer = setTimeout(() => doCreate(undefined), 3000);
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      clearTimeout(timer);
+    };
   }, []);
 
   return (

@@ -253,7 +253,10 @@ class LearningItemCreate(BaseModel):
 
     source_url: str = Field(..., description="原文 URL")
     title: str = Field(..., description="页面标题（扩展端传入）")
-    item_type: str = Field(default="article", description="类型：article | tool")
+    item_type: str = Field(
+        default="article",
+        description="类型：article=知识卡片待转 | tool=工具待转 | unspecified=待用户在暂存区分类型",
+    )
     content: Optional[str] = Field(
         default=None,
         description="扩展端预先提取的页面正文（用于后台 AI 补全）",
@@ -289,3 +292,4 @@ class LearningItemConvertRequest(BaseModel):
     key_points: Optional[List[str]] = None
     ai_tags: Optional[List[str]] = None
     tool_description: Optional[str] = None
+    item_type: Optional[str] = None

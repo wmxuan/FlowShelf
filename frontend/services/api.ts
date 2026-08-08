@@ -38,9 +38,14 @@ export const cardsApi = {
       summary: string;
       key_points: string[];
       tags: string[];
-    }
+    },
+    content?: string
   ) => {
     const body: Record<string, unknown> = { source_url: url };
+    if (content) {
+      // Bookmarklet / 扩展端预提取的正文，跳过服务端抓取，规避反爬 / SPA 场景
+      body.content = content;
+    }
     if (preview) {
       // 携带预览数据走「预览保存」路径，跳过 AI 生成，保留用户编辑后的内容
       body.title = preview.title;
