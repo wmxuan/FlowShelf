@@ -138,8 +138,17 @@ export const toolsApi = {
 };
 
 // 搜索 API
+/**
+ * 搜索结果统一上限。
+ *
+ * 关键约束：顶部全局搜索与单库搜索（cards/tools）必须使用同一个 limit，
+ * 否则顶部 type=all 走「跨类型混合排序后截断」会与单库「各自排序后截断」产生不一致。
+ * 现顶部改为并行调 type=cards + type=tools，与单库完全对齐，limit 也共用此常量。
+ */
+export const SEARCH_DEFAULT_LIMIT = 50;
+
 export const searchApi = {
-  semantic: (query: string, type: string = 'all', limit: number = 20) => {
+  semantic: (query: string, type: string = 'all', limit: number = SEARCH_DEFAULT_LIMIT) => {
     const queryString = new URLSearchParams();
     queryString.set('q', query);
     queryString.set('type', type);

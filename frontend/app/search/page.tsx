@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Search, Sparkles, ExternalLink, FileText, Wrench, Loader2 } from 'lucide-react';
-import { searchApi } from '@/services/api';
+import { searchApi, SEARCH_DEFAULT_LIMIT } from '@/services/api';
 import type { SearchResult } from '@/types';
 
 export default function SearchPage() {
@@ -34,9 +34,19 @@ function SearchContent() {
     setActiveTab('all');
 
     try {
-      // 始终以 all 拉取，分类在前端按 result.type 分桶
-      const data = await searchApi.semantic(searchTerm, 'all', 20);
-      setResults(data.results);
+      // 并行调用 cards + tools 两次，与单库页（/cards、/toolbox）使用完全相同的
+      // (type, limit, query) 参数，确保顶部全局搜索的分类计数与单库搜索结果一致。
+      // 不再使用 type=all —— 后者走跨类型混合排序后截断，与单库各自排序后截断本质不同，
+      // 在数据量接近/超过 limit 时必然产生不一致。
+      const [cardsResp, toolsResp] = await Promise.all([
+        searchApi.semantic(searchTerm, 'cards', SEARCH_DEFAULT_LIMIT),
+        searchApi.semantic(searchTerm, 'tools', SEARCH_DEFAULT_LIMIT),
+      ]);
+      // 合并后按 score 降序，使「全部」Tab 仍按相关度统一展示
+      const merged = [...cardsResp.results, ...toolsResp.results].sort(
+        (a, b) => b.score - a.score
+      );
+      setResults(merged);
     } catch (err) {
       console.error('搜索失败:', err);
       alert('搜索失败');
