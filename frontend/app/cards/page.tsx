@@ -3,10 +3,26 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { FileText, Tag, Calendar, Sparkles, ExternalLink, Trash2, Search, X, Plus } from 'lucide-react';
-import { cardsApi } from '@/services/api';
-import type { Card, TagCount } from '@/types';
+import { cardsApi, searchApi } from '@/services/api';
+import type { Card, SearchResult, TagCount } from '@/types';
 import AddCardModal from '@/components/AddCardModal';
 import CardDetailModal from '@/components/CardDetailModal';
+import DeleteConfirmButton from '@/components/DeleteConfirmButton';
+
+// SearchResult → Card 适配层：搜索态用 searchApi 返回的 SearchResult 渲染卡片，
+// 这里把搜索结果字段映射回 Card 结构，复用既有卡片渲染逻辑。
+const adaptSearchResultToCard = (r: SearchResult): Card => ({
+  id: r.id,
+  source_url: r.url,
+  title: r.title,
+  ai_summary: r.summary || '',
+  key_points: r.key_points || [],
+  ai_tags: r.tags,
+  source_type: 'article',
+  read_at: null,
+  created_at: r.created_at || new Date().toISOString(),
+  updated_at: r.created_at || new Date().toISOString(),
+});
 
 export default function CardsPage() {
   const [cards, setCards] = useState<Card[]>([]);
@@ -21,15 +37,20 @@ export default function CardsPage() {
 
   const isSearching = searchQuery.trim().length > 0;
 
-  const fetchCards = async (tag?: string, q?: string) => {
+  // 搜索态走 searchApi（混合检索），非搜索态走 cardsApi.list（标签筛选）
+  const fetchCards = async (tag?: string, query?: string) => {
     setIsLoading(true);
     try {
-      const data = await cardsApi.list({
-        limit: 50,
-        tag: q ? undefined : tag || undefined,
-        q: q || undefined,
-      });
-      setCards(data);
+      if (query && query.trim()) {
+        const resp = await searchApi.semantic(query.trim(), 'cards', 50);
+        setCards(resp.results.map(adaptSearchResultToCard));
+      } else {
+        const data = await cardsApi.list({
+          limit: 50,
+          tag: tag || undefined,
+        });
+        setCards(data);
+      }
     } catch (err) {
       console.error('获取卡片失败:', err);
     } finally {
@@ -46,7 +67,7 @@ export default function CardsPage() {
     }
   };
 
-  // 搜索优先：有搜索词走 q（忽略标签筛选），无搜索词走标签筛选
+  // 搜索优先：有搜索词走 searchApi（忽略标签筛选），无搜索词走标签筛选
   useEffect(() => {
     fetchCards(isSearching ? undefined : activeTag || undefined, isSearching ? searchQuery.trim() : undefined);
   }, [activeTag, searchQuery]);
@@ -66,7 +87,6 @@ export default function CardsPage() {
   }, []);
 
   const handleDelete = async (id: number) => {
-    if (!confirm('确定删除这张卡片吗？')) return;
     try {
       await cardsApi.delete(id);
       fetchCards(
@@ -225,7 +245,7 @@ export default function CardsPage() {
                 <h3 className="card-title line-clamp-2 flex-1">
                   {card.title}
                 </h3>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="flex items-center gap-1">
                   <Link
                     href={card.source_url}
                     target="_blank"
@@ -235,16 +255,14 @@ export default function CardsPage() {
                   >
                     <ExternalLink className="h-4 w-4 text-muted-foreground" />
                   </Link>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(card.id);
-                    }}
-                    className="rounded p-1 hover:bg-destructive/10 hover:text-destructive transition-colors"
-                    title="删除"
+                  <DeleteConfirmButton
+                    onConfirm={() => handleDelete(card.id)}
+                    buttonClassName="rounded p-1 hover:bg-destructive/10 hover:text-destructive transition-colors"
+                    buttonTitle="删除"
+                    stopPropagation
                   >
                     <Trash2 className="h-4 w-4" />
-                  </button>
+                  </DeleteConfirmButton>
                 </div>
               </div>
 

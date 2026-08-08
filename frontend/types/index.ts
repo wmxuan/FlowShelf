@@ -45,6 +45,12 @@ export interface SearchResult {
   summary: string | null;
   tags: string[];
   score: number;
+  // 卡片特有字段（type=card 时存在）
+  key_points?: string[];
+  created_at?: string;
+  // 工具特有字段（type=tool 时存在）
+  visit_count?: number;
+  last_visited_at?: string | null;
 }
 
 export interface SearchResponse {

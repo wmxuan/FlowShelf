@@ -9,7 +9,11 @@ import type {
   CardPreview,
   CardSaved,
   ClassifyResponse,
+  GroupContext,
   HealthResponse,
+  LearningItem,
+  TabAssignResponse,
+  TabGroupResponse,
   ToolPreview,
   ToolSaved,
 } from "./types";
@@ -183,4 +187,40 @@ export const toolsApi = {
 
 export const healthApi = {
   check: () => request<HealthResponse>("/health"),
+};
+
+// ============ Tab 管理 ============
+
+export const tabsApi = {
+  /** AI Tab 归组：将多个标签页按主题相似度聚类分组 */
+  group: (tabs: { url: string; title: string; favIconUrl?: string }[]) =>
+    request<TabGroupResponse>("/tabs/group", {
+      method: "POST",
+      body: JSON.stringify({ tabs }),
+    }),
+  /** AI 单标签分组：将一个新标签分配到已有分组或创建新分组（省 token） */
+  assign: (
+    tab: { url: string; title: string },
+    existingGroups: GroupContext[]
+  ) =>
+    request<TabAssignResponse>("/tabs/assign", {
+      method: "POST",
+      body: JSON.stringify({ tab, existing_groups: existingGroups }),
+    }),
+};
+
+// ============ 待学习队列（快速收藏） ============
+
+export const learningApi = {
+  /** 快速保存到待学习队列（AI 后台异步补全） */
+  create: (
+    source_url: string,
+    title: string,
+    item_type: "article" | "tool" = "article",
+    content?: string
+  ) =>
+    request<LearningItem>("/learning", {
+      method: "POST",
+      body: JSON.stringify({ source_url, title, item_type, content }),
+    }),
 };

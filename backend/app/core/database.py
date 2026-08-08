@@ -1,6 +1,7 @@
 """
 数据库配置
 """
+
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from typing import AsyncGenerator
@@ -12,7 +13,9 @@ settings = get_settings()
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
+    connect_args=(
+        {"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
+    ),
 )
 
 # 创建会话工厂
@@ -25,6 +28,7 @@ async_session_maker = async_sessionmaker(
 
 class Base(DeclarativeBase):
     """所有模型的基类"""
+
     pass
 
 
@@ -45,7 +49,7 @@ async def init_db():
     """初始化数据库表"""
     async with engine.begin() as conn:
         # 导入所有模型以确保表被创建
-        from app.db.models.models import Card, Tool, Tag
+        from app.db.models.models import Card, Tool, Tag, LearningItem
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)

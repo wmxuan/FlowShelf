@@ -148,6 +148,12 @@ class SearchResult(BaseModel):
     summary: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     score: float = Field(description="相关度分数")
+    # 卡片特有字段（type=card 时填充）
+    key_points: Optional[List[str]] = None
+    created_at: Optional[datetime] = None
+    # 工具特有字段（type=tool 时填充）
+    visit_count: Optional[int] = None
+    last_visited_at: Optional[datetime] = None
 
 
 class SearchResponse(BaseModel):
@@ -237,3 +243,49 @@ class ClassifyResponse(BaseModel):
     type: str = Field(..., description="类型：article | tool | video")
     tags: List[str] = Field(default_factory=list, description="AI 生成的标签")
     title: Optional[str] = Field(None, description="抽取到的页面标题")
+
+
+# ============ 待学习队列 ============
+
+
+class LearningItemCreate(BaseModel):
+    """快速收藏请求（轻量保存，AI 后台异步补全）"""
+
+    source_url: str = Field(..., description="原文 URL")
+    title: str = Field(..., description="页面标题（扩展端传入）")
+    item_type: str = Field(default="article", description="类型：article | tool")
+    content: Optional[str] = Field(
+        default=None,
+        description="扩展端预先提取的页面正文（用于后台 AI 补全）",
+    )
+
+
+class LearningItemResponse(BaseModel):
+    """待学习项响应"""
+
+    id: int
+    source_url: str
+    title: str
+    item_type: str
+    ai_summary: Optional[str] = None
+    key_points: List[str] = Field(default_factory=list)
+    ai_tags: List[str] = Field(default_factory=list)
+    tool_description: Optional[str] = None
+    is_ready: bool = False
+    is_converted: bool = False
+    converted_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class LearningItemConvertRequest(BaseModel):
+    """将待学习项转换为卡片/工具的请求"""
+
+    title: Optional[str] = None
+    ai_summary: Optional[str] = None
+    key_points: Optional[List[str]] = None
+    ai_tags: Optional[List[str]] = None
+    tool_description: Optional[str] = None

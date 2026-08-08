@@ -20,23 +20,23 @@ function SearchContent() {
 
   const [query, setQuery] = useState(initialQ);
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const [searchType, setSearchType] = useState<'all' | 'cards' | 'tools'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'card' | 'tool'>('all');
   const autoRan = useRef(false);
 
-  const handleSearch = async (q?: string, type?: 'all' | 'cards' | 'tools') => {
+  const handleSearch = async (q?: string) => {
     const searchTerm = (q ?? query).trim();
     if (!searchTerm) return;
 
     setIsLoading(true);
     setHasSearched(true);
+    setActiveTab('all');
 
     try {
-      const data = await searchApi.semantic(searchTerm, type ?? searchType, 20);
+      // 始终以 all 拉取，分类在前端按 result.type 分桶
+      const data = await searchApi.semantic(searchTerm, 'all', 20);
       setResults(data.results);
-      setTotal(data.total);
     } catch (err) {
       console.error('搜索失败:', err);
       alert('搜索失败');
@@ -50,7 +50,7 @@ function SearchContent() {
     if (autoRan.current) return;
     if (initialQ.trim()) {
       autoRan.current = true;
-      handleSearch(initialQ, 'all');
+      handleSearch(initialQ);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQ]);
@@ -65,6 +65,12 @@ function SearchContent() {
     // 将 cosine similarity (-1 到 1) 转换为百分比
     return Math.round((score + 1) * 50);
   };
+
+  // 按 result.type 分桶，前端过滤（不混杂）
+  const cardResults = results.filter((r) => r.type === 'card');
+  const toolResults = results.filter((r) => r.type === 'tool');
+  const filteredResults =
+    activeTab === 'all' ? results : activeTab === 'card' ? cardResults : toolResults;
 
   return (
     <div className="space-y-8">
@@ -111,51 +117,63 @@ function SearchContent() {
             </button>
           </div>
 
-          {/* 搜索类型 */}
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">搜索范围：</span>
-            <button
-              onClick={() => setSearchType('all')}
-              className={`badge ${searchType === 'all' ? 'badge-primary' : 'badge-secondary'}`}
-            >
-              全部
-            </button>
-            <button
-              onClick={() => setSearchType('cards')}
-              className={`badge ${searchType === 'cards' ? 'badge-primary' : 'badge-secondary'}`}
-            >
-              📚 卡片
-            </button>
-            <button
-              onClick={() => setSearchType('tools')}
-              className={`badge ${searchType === 'tools' ? 'badge-primary' : 'badge-secondary'}`}
-            >
-              🛠️ 工具
-            </button>
-          </div>
         </div>
       </div>
 
       {/* 搜索结果 */}
       {hasSearched && !isLoading && (
         <div className="space-y-4">
+          {/* Tab 切换：全部 / 知识卡片 / 工具 —— 前端按 result.type 分桶，不混杂 */}
+          {results.length > 0 && (
+            <div className="flex items-center gap-1 border-b border-border">
+              <TabButton
+                active={activeTab === 'all'}
+                onClick={() => setActiveTab('all')}
+                icon={<Search className="h-4 w-4" />}
+                label="全部"
+                count={results.length}
+              />
+              <TabButton
+                active={activeTab === 'card'}
+                onClick={() => setActiveTab('card')}
+                icon={<FileText className="h-4 w-4" />}
+                label="知识卡片"
+                count={cardResults.length}
+              />
+              <TabButton
+                active={activeTab === 'tool'}
+                onClick={() => setActiveTab('tool')}
+                icon={<Wrench className="h-4 w-4" />}
+                label="工具"
+                count={toolResults.length}
+              />
+            </div>
+          )}
+
           <p className="text-sm text-muted-foreground">
-            找到 <span className="font-semibold text-foreground">{total}</span> 个相关结果
+            找到 <span className="font-semibold text-foreground">{filteredResults.length}</span> 个相关结果
+            {activeTab !== 'all' && results.length > 0 && (
+              <span className="ml-1">（共 {results.length} 个）</span>
+            )}
           </p>
 
-          {results.length === 0 ? (
+          {filteredResults.length === 0 ? (
             <div className="card text-center py-12">
               <div className="mx-auto mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-muted">
                 <Search className="h-8 w-8 text-muted-foreground" />
               </div>
-              <h3 className="text-lg font-semibold mb-2">没有找到相关结果</h3>
+              <h3 className="text-lg font-semibold mb-2">
+                {results.length === 0 ? '没有找到相关结果' : '当前分类下没有结果'}
+              </h3>
               <p className="text-muted-foreground">
-                换个关键词试试，或者先去收藏一些内容
+                {results.length === 0
+                  ? '换个关键词试试，或者先去收藏一些内容'
+                  : '切换到其他分类或"全部"查看结果'}
               </p>
             </div>
           ) : (
             <div className="space-y-3">
-              {results.map((result, idx) => (
+              {filteredResults.map((result, idx) => (
                 <div key={idx} className="card flex gap-4">
                   {/* 相关性条 */}
                   <div className="flex flex-col items-center justify-center w-8">
@@ -228,5 +246,30 @@ function SearchContent() {
         </div>
       )}
     </div>
+  );
+}
+
+interface TabButtonProps {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+}
+
+function TabButton({ active, onClick, icon, label, count }: TabButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+        active
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground'
+      }`}
+    >
+      {icon}
+      <span>{label}</span>
+      <span className="text-xs text-muted-foreground">({count})</span>
+    </button>
   );
 }

@@ -171,6 +171,31 @@ class BaseAIProvider(ABC):
         """
         pass
 
+    async def group_tabs(self, tabs: List[dict]) -> dict:
+        """
+        AI Tab 归组：将多个标签页按主题相似度聚类分组
+
+        Args:
+            tabs: 标签页列表，每个元素含 url, title
+
+        Returns:
+            {"groups": [{"name": str, "tab_indices": [int, ...]}, ...]}
+        """
+        raise NotImplementedError("group_tabs 未在子类中实现")
+
+    async def assign_tab_to_group(self, tab: dict, existing_groups: List[dict]) -> dict:
+        """
+        AI 单标签分组：将一个新标签页分配到已有分组或创建新分组（省 token）
+
+        Args:
+            tab: 新标签页 {"url": str, "title": str}
+            existing_groups: 已有分组 [{"name": str, "sample_tabs": [{"url", "title"}, ...]}, ...]
+
+        Returns:
+            {"action": "assign"|"create", "group_name": str}
+        """
+        raise NotImplementedError("assign_tab_to_group 未在子类中实现")
+
 
 class RealAIProvider(BaseAIProvider):
     """真实 AI Provider（调用 OpenAI 兼容 API）"""
@@ -376,6 +401,102 @@ class RealAIProvider(BaseAIProvider):
             "tags": parsed.tags,
         }
 
+    async def group_tabs(self, tabs: List[dict]) -> dict:
+        """AI Tab 归组：将多个标签页按主题相似度聚类分组"""
+        prompt_template = _load_prompt("tab_grouping")
+        tabs_text = "\n".join(
+            f"[{i}] {t.get('title', '(无标题)')} | {t.get('url', '')}"
+            for i, t in enumerate(tabs)
+        )
+        user_prompt = prompt_template.format(tabs=tabs_text)
+
+        try:
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是 FlowShelf 的 Tab 归组助手，必须严格按 JSON 格式输出。",
+                    },
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=500,
+                temperature=0.0,
+            )
+        except APITimeoutError:
+            raise RuntimeError("AI 调用超时")
+        except RateLimitError:
+            raise RuntimeError("AI 调用触发限流，请稍后重试")
+        except APIError as exc:
+            raise RuntimeError(f"AI 调用失败：{exc.__class__.__name__}: {exc}")
+
+        raw = completion.choices[0].message.content or ""
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"AI 返回非合法 JSON：{raw[:200]}")
+
+        groups = data.get("groups", [])
+        if not groups:
+            raise RuntimeError("AI 未返回有效分组")
+
+        return {"groups": groups}
+
+    async def assign_tab_to_group(self, tab: dict, existing_groups: List[dict]) -> dict:
+        """AI 单标签分组：将一个新标签页分配到已有分组或创建新分组（省 token）"""
+        # 无已有分组时直接创建新组，不调用 LLM
+        if not existing_groups:
+            return {"action": "create", "group_name": "新标签"}
+
+        prompt_template = _load_prompt("tab_assign")
+        groups_text = "\n".join(
+            f"- {g['name']}（{g.get('count', 0)} 个标签，示例：{g.get('sample_tabs', ['无'])[0].get('title', '无') if g.get('sample_tabs') else '无'}）"
+            for g in existing_groups
+        )
+        user_prompt = prompt_template.format(
+            title=tab.get("title", "(无标题)"),
+            url=tab.get("url", ""),
+            groups=groups_text,
+        )
+
+        try:
+            completion = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是 FlowShelf 的 Tab 归组助手，必须严格按 JSON 格式输出。",
+                    },
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=100,
+                temperature=0.0,
+            )
+        except (APITimeoutError, RateLimitError, APIError) as exc:
+            logger.warning("AI 单标签分组失败，降级为创建新组：%s", exc)
+            return {"action": "create", "group_name": "新标签"}
+
+        raw = completion.choices[0].message.content or ""
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("AI 单标签分组返回非合法 JSON，降级为创建新组")
+            return {"action": "create", "group_name": "新标签"}
+
+        action = data.get("action", "create")
+        group_name = data.get("group_name", "新标签")
+
+        # assign 时校验 group_name 是否存在于已有分组
+        if action == "assign":
+            existing_names = {g["name"] for g in existing_groups}
+            if group_name not in existing_names:
+                logger.warning("AI 返回的 group_name 不在已有分组中，降级为创建新组")
+                return {"action": "create", "group_name": "新标签"}
+
+        return {"action": action, "group_name": group_name}
+
 
 class DemoAIProvider(BaseAIProvider):
     """DEMO 模式 AI Provider（返回模拟数据）"""
@@ -437,6 +558,57 @@ class DemoAIProvider(BaseAIProvider):
             "title": f"来自 {host} 的工具",
             "description": "这是一个在线工具，可帮助用户高效完成特定任务。",
             "tags": ["工具", "常用"],
+        }
+
+    async def group_tabs(self, tabs: List[dict]) -> dict:
+        """DEMO 模式 Tab 归组：按域名简单分组"""
+        from collections import defaultdict
+        from urllib.parse import urlparse
+
+        domain_groups: dict[str, list[int]] = defaultdict(list)
+        for i, t in enumerate(tabs):
+            try:
+                host = urlparse(t.get("url", "")).netloc.replace("www.", "")
+                domain_groups[host or "其他"].append(i)
+            except Exception:
+                domain_groups["其他"].append(i)
+
+        groups = []
+        for domain, indices in domain_groups.items():
+            groups.append(
+                {
+                    "name": f"{domain} 相关" if domain != "其他" else "其他",
+                    "tab_indices": indices,
+                }
+            )
+
+        return {"groups": groups}
+
+    async def assign_tab_to_group(self, tab: dict, existing_groups: List[dict]) -> dict:
+        """DEMO 模式单标签分组：按域名匹配已有分组，否则创建新组"""
+        from urllib.parse import urlparse
+
+        if not existing_groups:
+            return {"action": "create", "group_name": "新标签"}
+
+        try:
+            new_domain = urlparse(tab.get("url", "")).netloc.replace("www.", "")
+        except Exception:
+            new_domain = ""
+
+        for g in existing_groups:
+            sample_tabs = g.get("sample_tabs", [])
+            for st in sample_tabs:
+                try:
+                    domain = urlparse(st.get("url", "")).netloc.replace("www.", "")
+                    if domain and domain == new_domain:
+                        return {"action": "assign", "group_name": g["name"]}
+                except Exception:
+                    continue
+
+        return {
+            "action": "create",
+            "group_name": f"{new_domain} 相关" if new_domain else "新标签",
         }
 
 

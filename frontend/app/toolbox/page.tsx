@@ -2,9 +2,24 @@
 
 import { useEffect, useState } from 'react';
 import { Wrench, Tag, Clock, Eye, Trash2, ExternalLink, Search, X, Plus } from 'lucide-react';
-import { toolsApi } from '@/services/api';
+import { toolsApi, searchApi } from '@/services/api';
 import AddToolModal from '@/components/AddToolModal';
-import type { Tool, TagCount } from '@/types';
+import DeleteConfirmButton from '@/components/DeleteConfirmButton';
+import type { Tool, SearchResult, TagCount } from '@/types';
+
+// SearchResult → Tool 适配层：搜索态用 searchApi 返回的 SearchResult 渲染工具列表，
+// 字段映射回 Tool 结构以复用既有渲染逻辑。
+const adaptSearchResultToTool = (r: SearchResult): Tool => ({
+  id: r.id,
+  url: r.url,
+  title: r.title,
+  ai_tags: r.tags,
+  description: r.summary,
+  visit_count: r.visit_count ?? 0,
+  last_visited_at: r.last_visited_at ?? null,
+  created_at: r.created_at || new Date().toISOString(),
+  updated_at: r.created_at || new Date().toISOString(),
+});
 
 export default function ToolboxPage() {
   const [tools, setTools] = useState<Tool[]>([]);
@@ -19,16 +34,21 @@ export default function ToolboxPage() {
 
   const isSearching = searchQuery.trim().length > 0;
 
+  // 搜索态走 searchApi（混合检索，忽略 sort_by/tag），非搜索态走 toolsApi.list
   const fetchTools = async () => {
     setIsLoading(true);
     try {
-      const data = await toolsApi.list({
-        limit: 50,
-        tag: isSearching ? undefined : activeTag || undefined,
-        sort_by: sortBy,
-        q: isSearching ? searchQuery.trim() : undefined,
-      });
-      setTools(data);
+      if (isSearching) {
+        const resp = await searchApi.semantic(searchQuery.trim(), 'tools', 50);
+        setTools(resp.results.map(adaptSearchResultToTool));
+      } else {
+        const data = await toolsApi.list({
+          limit: 50,
+          tag: activeTag || undefined,
+          sort_by: sortBy,
+        });
+        setTools(data);
+      }
     } catch (err) {
       console.error('获取工具失败:', err);
     } finally {
@@ -45,7 +65,7 @@ export default function ToolboxPage() {
     }
   };
 
-  // 搜索优先：有搜索词走 q（忽略标签筛选），无搜索词走标签筛选
+  // 搜索优先：有搜索词走 searchApi（忽略标签/排序），无搜索词走标签+排序
   useEffect(() => {
     fetchTools();
   }, [activeTag, sortBy, searchQuery]);
@@ -65,7 +85,6 @@ export default function ToolboxPage() {
   }, []);
 
   const handleDelete = async (id: number) => {
-    if (!confirm('确定删除这个工具吗？')) return;
     try {
       await toolsApi.delete(id);
       fetchTools();
@@ -197,13 +216,23 @@ export default function ToolboxPage() {
         </div>
       )}
 
-      {/* 工具列表 */}
+      {/* 工具列表 - 紧凑列表布局 */}
       {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="card animate-pulse">
-              <div className="mb-3 h-4 w-3/4 bg-muted rounded" />
-              <div className="h-3 w-1/2 bg-muted rounded" />
+        <div className="space-y-2">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 animate-pulse"
+            >
+              <div className="h-8 w-8 bg-muted rounded-md shrink-0" />
+              <div className="flex-1 space-y-1.5">
+                <div className="h-4 w-1/3 bg-muted rounded" />
+                <div className="h-3 w-1/4 bg-muted rounded" />
+              </div>
+              <div className="flex gap-1">
+                <div className="h-5 w-12 bg-muted rounded-full" />
+                <div className="h-5 w-12 bg-muted rounded-full" />
+              </div>
             </div>
           ))}
         </div>
@@ -226,59 +255,114 @@ export default function ToolboxPage() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-          {tools.map((tool) => (
-            <div key={tool.id} className="card group flex flex-col">
-              <div className="mb-3 flex items-start justify-between gap-2">
-                <h3 className="font-semibold line-clamp-2 flex-1" title={tool.title}>
-                  {tool.title}
-                </h3>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() => handleDelete(tool.id)}
-                    className="rounded p-1 hover:bg-destructive/10 hover:text-destructive transition-colors"
-                    title="删除"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+        <div className="space-y-2">
+          {tools.map((tool) => {
+            // 从 URL 提取域名用于获取 favicon
+            let domain = '';
+            try {
+              domain = new URL(tool.url).hostname;
+            } catch {
+              domain = '';
+            }
+            const faviconUrl = domain
+              ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
+              : '';
+
+            return (
+              <div
+                key={tool.id}
+                className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 hover:border-primary/30 hover:shadow-sm transition-all"
+              >
+                {/* favicon */}
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/50">
+                  {faviconUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={faviconUrl}
+                      alt=""
+                      width={20}
+                      height={20}
+                      className="h-5 w-5 rounded-sm"
+                      onError={(e) => {
+                        // 加载失败时隐藏 img，显示备用 Wrench 图标
+                        (e.currentTarget as HTMLImageElement).style.display = 'none';
+                        const sibling = (e.currentTarget.parentElement?.querySelector('.fallback-icon')) as HTMLElement | null;
+                        if (sibling) sibling.style.display = 'block';
+                      }}
+                    />
+                  ) : null}
+                  <Wrench
+                    className="fallback-icon h-5 w-5 text-muted-foreground"
+                    style={{ display: faviconUrl ? 'none' : 'block' }}
+                  />
                 </div>
-              </div>
 
-              {/* 标签 */}
-              <div className="mb-3 flex flex-wrap gap-1">
-                {(tool.ai_tags || []).slice(0, 3).map((tag, i) => (
-                  <span key={i} className="badge badge-secondary text-xs">
-                    {tag}
-                  </span>
-                ))}
-              </div>
-
-              {/* 底部：访问统计 + 链接 */}
-              <div className="mt-auto flex items-center justify-between pt-2 border-t border-border">
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <Eye className="h-3 w-3" />
-                    {tool.visit_count} 次
-                  </span>
-                  {tool.last_visited_at && (
-                    <span className="flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      {new Date(tool.last_visited_at).toLocaleDateString('zh-CN')}
+                {/* 标题 + 域名 */}
+                <div className="min-w-0 flex-1">
+                  <a
+                    href={tool.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => handleVisit(tool.id)}
+                    className="block truncate text-sm font-medium hover:text-primary transition-colors"
+                    title={tool.title}
+                  >
+                    {tool.title}
+                  </a>
+                  {domain && (
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {domain}
                     </span>
                   )}
                 </div>
-                <a
-                  href={tool.url}
-                  target="_blank"
-                  onClick={() => handleVisit(tool.id)}
-                  className="rounded p-1 hover:bg-muted transition-colors"
-                  title="打开并记录访问"
-                >
-                  <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                </a>
+
+                {/* 标签 */}
+                <div className="hidden sm:flex shrink-0 items-center gap-1">
+                  {(tool.ai_tags || []).slice(0, 3).map((tag, i) => (
+                    <span key={i} className="badge badge-secondary text-xs">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+
+                {/* 访问次数 */}
+                <span className="hidden md:flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                  <Eye className="h-3.5 w-3.5" />
+                  {tool.visit_count}
+                </span>
+
+                {/* 最后访问时间 */}
+                {tool.last_visited_at && (
+                  <span className="hidden lg:flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                    <Clock className="h-3.5 w-3.5" />
+                    {new Date(tool.last_visited_at).toLocaleDateString('zh-CN')}
+                  </span>
+                )}
+
+                {/* 操作按钮 - 默认显示 */}
+                <div className="flex shrink-0 items-center gap-1">
+                  <a
+                    href={tool.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => handleVisit(tool.id)}
+                    className="rounded p-1.5 hover:bg-muted transition-colors"
+                    title="打开并记录访问"
+                  >
+                    <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                  </a>
+                  <DeleteConfirmButton
+                    onConfirm={() => handleDelete(tool.id)}
+                    buttonClassName="rounded p-1.5 hover:bg-destructive/10 hover:text-destructive transition-colors"
+                    buttonTitle="删除"
+                    confirmText="确认删除这个工具吗？"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </DeleteConfirmButton>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
