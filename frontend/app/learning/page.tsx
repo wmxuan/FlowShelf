@@ -5,15 +5,21 @@ import {
   FileText,
   Wrench,
   Calendar,
-  Sparkles,
-  ExternalLink,
-  Trash2,
-  Clock,
   Shuffle,
 } from 'lucide-react';
 import DeleteConfirmButton from '@/components/DeleteConfirmButton';
 import { learningApi } from '@/services/api';
 import type { LearningItem } from '@/types';
+import KnowledgeCard, { KnowledgeCardActions } from '@/components/cards/KnowledgeCard';
+import ToolCard, { ToolCardActions } from '@/components/cards/ToolCard';
+import KnowledgeDetailModal from '@/components/cards/KnowledgeDetailModal';
+import ToolDetailModal from '@/components/cards/ToolDetailModal';
+import {
+  adaptLearningArticle,
+  adaptLearningTool,
+  type KnowledgeCardData,
+  type ToolCardData,
+} from '@/components/cards/shared';
 
 type TabKey = 'unspecified' | 'article' | 'tool';
 
@@ -24,6 +30,9 @@ export default function LearningPage() {
   // key = `${id}` 或 `${id}-${overrideType}`
   const [converting, setConverting] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<TabKey>('unspecified');
+  const [regeneratingId, setRegeneratingId] = useState<number | null>(null);
+  const [selectedArticle, setSelectedArticle] = useState<KnowledgeCardData | null>(null);
+  const [selectedTool, setSelectedTool] = useState<ToolCardData | null>(null);
 
   const loadItems = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -89,15 +98,6 @@ export default function LearningPage() {
     }
   };
 
-  const handleEnrich = async (id: number) => {
-    try {
-      await learningApi.enrich(id);
-      loadItems();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '重新生成失败');
-    }
-  };
-
   const handleDelete = async (id: number) => {
     try {
       await learningApi.delete(id);
@@ -131,6 +131,86 @@ export default function LearningPage() {
   const unspecifiedPendingCount = unspecifiedItems.filter((i) => !i.is_converted).length;
   const articlePendingCount = articleItems.filter((i) => !i.is_ready && !i.is_converted).length;
   const toolPendingCount = toolItems.filter((i) => !i.is_ready && !i.is_converted).length;
+
+  // ========== article 详情弹窗：编辑保存 ==========
+  const handleArticleUpdated = (updated: {
+    id: number;
+    source: 'learning' | 'cards';
+    title: string;
+    source_url: string;
+    ai_summary: string;
+    key_points: string[];
+    ai_tags: string[];
+    created_at: string;
+  }) => {
+    setItems((prev) =>
+      prev.map((i) =>
+        i.id === updated.id
+          ? {
+              ...i,
+              title: updated.title,
+              ai_summary: updated.ai_summary,
+              key_points: updated.key_points,
+              ai_tags: updated.ai_tags,
+            }
+          : i
+      )
+    );
+    setSelectedArticle((prev) =>
+      prev && prev.id === updated.id
+        ? {
+            ...prev,
+            title: updated.title,
+            ai_summary: updated.ai_summary,
+            key_points: updated.key_points,
+            ai_tags: updated.ai_tags,
+          }
+        : prev
+    );
+  };
+
+  // ========== tool 详情弹窗：编辑保存 ==========
+  const handleToolUpdated = (updated: {
+    id: number;
+    source: 'learning' | 'toolbox';
+    title: string;
+    url: string;
+    ai_tags: string[];
+    description: string | null;
+    created_at: string;
+    visit_count?: number;
+    last_visited_at?: string | null;
+  }) => {
+    setItems((prev) =>
+      prev.map((i) =>
+        i.id === updated.id
+          ? {
+              ...i,
+              title: updated.title,
+              tool_description: updated.description,
+            }
+          : i
+      )
+    );
+    setSelectedTool((prev) =>
+      prev && prev.id === updated.id
+        ? { ...prev, title: updated.title, description: updated.description }
+        : prev
+    );
+  };
+
+  // ========== AI 重新生成（learning 用 enrich） ==========
+  const handleRegenerate = async (id: number) => {
+    setRegeneratingId(id);
+    try {
+      await learningApi.enrich(id);
+      await loadItems();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重新生成失败');
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
 
   const renderUnspecifiedCard = (item: LearningItem) => {
     const articleKey = `${item.id}-article`;
@@ -168,8 +248,6 @@ export default function LearningPage() {
             🗂️ 尚未选择归档类型，转正时 AI 会按所选类型同步生成内容
           </div>
         </div>
-
-        {/* 通用标签兜底展示（即便 unspecified 也可能用户未来手动编辑——此处不渲染空标签，省区域） */}
 
         {item.is_converted && (
           <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 mb-3">
@@ -306,255 +384,127 @@ export default function LearningPage() {
         </div>
       )}
 
-      {/* 待分类 tab：列表视图 + 双按钮 */}
+      {/* 待分类 tab：列表视图 + 双按钮（保持原有逻辑不变） */}
       {!loading && tabItems.length > 0 && activeTab === 'unspecified' && (
         <div className="grid gap-4 md:grid-cols-2">
           {tabItems.map((item) => renderUnspecifiedCard(item))}
         </div>
       )}
 
-      {/* 知识卡片 tab：原卡片布局，保持单按钮 */}
+      {/* 知识卡片 tab：使用统一 KnowledgeCard 组件 */}
       {!loading && tabItems.length > 0 && activeTab === 'article' && (
         <div className="grid gap-4 md:grid-cols-2">
-          {tabItems.map((item) => (
-            <div key={item.id} className="card overflow-hidden">
-              <div className="p-4">
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <h3 className="font-semibold text-sm line-clamp-2 flex-1">
-                    {item.title}
-                  </h3>
-                </div>
-
-                <a
-                  href={item.source_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-muted-foreground hover:text-primary truncate block mb-3"
-                >
-                  {item.source_url}
-                </a>
-
-                {!item.is_ready && (
-                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 mb-3">
-                    <div className="text-xs text-amber-700 flex items-center gap-2">
-                      <span className="inline-block animate-pulse">⏳</span>
-                      AI 正在生成摘要和标签...
-                    </div>
-                    <button
-                      onClick={() => handleEnrich(item.id)}
-                      className="text-xs text-amber-600 hover:underline mt-1"
-                    >
-                      手动触发生成
-                    </button>
-                  </div>
-                )}
-
-                {item.is_ready && item.ai_summary && (
-                  <p className="text-sm text-muted-foreground line-clamp-3 mb-3">
-                    {item.ai_summary}
-                  </p>
-                )}
-
-                {item.is_ready && item.key_points && item.key_points.length > 0 && (
-                  <div className="mb-3">
-                    <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
-                      <Sparkles className="h-3 w-3" />
-                      关键观点
-                    </div>
-                    <ul className="text-xs text-muted-foreground space-y-0.5">
-                      {item.key_points.slice(0, 3).map((kp, i) => (
-                        <li key={i} className="line-clamp-1">
-                          • {kp}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {item.is_ready && item.ai_tags && item.ai_tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mb-3">
-                    {item.ai_tags.map((tag, i) => (
-                      <span
-                        key={i}
-                        className="inline-flex items-center px-2 py-0.5 rounded-full bg-muted text-xs text-muted-foreground"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {item.is_converted && (
-                  <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 mb-3">
-                    <div className="text-xs text-green-700">
-                      ✅ 已转为{item.item_type === 'tool' ? '工具' : '卡片'}
-                      {item.converted_id && ` #${item.converted_id}`}
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Calendar className="h-3 w-3" />
-                    {formatDate(item.created_at)}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {!item.is_converted && (
-                      <button
-                        onClick={() => handleConvert(item.id)}
-                        disabled={!!converting[`${item.id}`]}
-                        className="text-xs px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                      >
-                        {converting[`${item.id}`] ? '转换中...' : '转为正式'}
-                      </button>
-                    )}
-                    <DeleteConfirmButton
-                      onConfirm={() => handleDelete(item.id)}
-                      buttonClassName="text-xs px-2 py-1 rounded border border-border hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
-                      buttonTitle="删除"
-                      confirmText="确认删除这个条目吗？"
-                    >
-                      删除
-                    </DeleteConfirmButton>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 工具 tab：原工具列表，保持单按钮 */}
-      {!loading && tabItems.length > 0 && activeTab === 'tool' && (
-        <div className="space-y-2">
           {tabItems.map((item) => {
-            let domain = '';
-            try {
-              domain = new URL(item.source_url).hostname;
-            } catch {
-              domain = '';
-            }
-            const faviconUrl = domain
-              ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
-              : '';
-
+            const data = adaptLearningArticle(item);
+            const isConverted = !!item.is_converted;
+            // AI 生成失败：is_ready=true 但 ai_summary 为空（后端 enrich 失败时标记 is_ready=true）
+            const isFailed = item.is_ready === true && !item.ai_summary;
+            const actions: KnowledgeCardActions = {
+              onView: () => setSelectedArticle(data),
+              // 仅失败时提供重新生成入口（卡片内嵌红色 chip）
+              ...(isFailed
+                ? {
+                    onRegenerate: () => handleRegenerate(item.id),
+                    isRegenerating: regeneratingId === item.id,
+                  }
+                : {}),
+              onDelete: (id) => handleDelete(id),
+              extraActions: !isConverted ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleConvert(item.id);
+                  }}
+                  disabled={!!converting[`${item.id}`]}
+                  className="text-xs px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                  title="转为正式卡片"
+                >
+                  {converting[`${item.id}`] ? '转换中...' : '转为正式'}
+                </button>
+              ) : null,
+            };
             return (
-              <div
-                key={item.id}
-                className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 hover:border-primary/30 hover:shadow-sm transition-all"
-              >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/50">
-                  {faviconUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={faviconUrl}
-                      alt=""
-                      width={20}
-                      height={20}
-                      className="h-5 w-5 rounded-sm"
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).style.display = 'none';
-                        const sibling = (e.currentTarget.parentElement?.querySelector('.fallback-icon')) as HTMLElement | null;
-                        if (sibling) sibling.style.display = 'block';
-                      }}
-                    />
-                  ) : null}
-                  <Wrench
-                    className="fallback-icon h-5 w-5 text-muted-foreground"
-                    style={{ display: faviconUrl ? 'none' : 'block' }}
-                  />
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <a
-                    href={item.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block truncate text-sm font-medium hover:text-primary transition-colors"
-                    title={item.title}
-                  >
-                    {item.title}
-                  </a>
-                  {domain && (
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {domain}
-                    </span>
-                  )}
-                </div>
-
-                {!item.is_ready && (
-                  <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-xs">
-                    <span className="animate-pulse">⏳</span>
-                    生成中
-                  </span>
-                )}
-
-                {item.is_converted && (
-                  <span className="shrink-0 inline-flex items-center rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-xs">
-                    ✅ 已转工具
-                    {item.converted_id && ` #${item.converted_id}`}
-                  </span>
-                )}
-
-                <div className="hidden sm:flex shrink-0 items-center gap-1">
-                  {(item.ai_tags || []).slice(0, 3).map((tag, i) => (
-                    <span key={i} className="badge badge-secondary text-xs">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-
-                <span className="hidden lg:flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                  <Clock className="h-3.5 w-3.5" />
-                  {formatDate(item.created_at)}
-                </span>
-
-                <div className="flex shrink-0 items-center gap-1">
-                  {!item.is_ready && (
-                    <button
-                      onClick={() => handleEnrich(item.id)}
-                      className="rounded px-2 py-1 text-xs hover:bg-amber-50 hover:text-amber-600 transition-colors"
-                      title="手动触发生成"
-                    >
-                      生成
-                    </button>
-                  )}
-                  {!item.is_converted && (
-                    <button
-                      onClick={() => handleConvert(item.id)}
-                      disabled={!!converting[`${item.id}`]}
-                      className="text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                      title="转为正式工具"
-                    >
-                      {converting[`${item.id}`] ? '...' : '转为正式'}
-                    </button>
-                  )}
-                  <a
-                    href={item.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="rounded p-1.5 hover:bg-muted transition-colors"
-                    title="打开来源"
-                  >
-                    <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                  </a>
-                  <DeleteConfirmButton
-                    onConfirm={() => handleDelete(item.id)}
-                    buttonClassName="rounded p-1.5 hover:bg-destructive/10 hover:text-destructive transition-colors"
-                    buttonTitle="删除"
-                    confirmText="确认删除这个条目吗？"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </DeleteConfirmButton>
-                </div>
-              </div>
+              <KnowledgeCard key={item.id} data={data} actions={actions} />
             );
           })}
         </div>
       )}
+
+      {/* 工具 tab：使用统一 ToolCard 组件 */}
+      {!loading && tabItems.length > 0 && activeTab === 'tool' && (
+        <div className="space-y-2">
+          {tabItems.map((item) => {
+            const data = adaptLearningTool(item);
+            const isConverted = !!item.is_converted;
+            // AI 生成失败：is_ready=true 但 tool_description 为空
+            const isFailed = item.is_ready === true && !item.tool_description;
+            const actions: ToolCardActions = {
+              onView: () => setSelectedTool(data),
+              ...(isFailed
+                ? {
+                    onRegenerate: () => handleRegenerate(item.id),
+                    isRegenerating: regeneratingId === item.id,
+                  }
+                : {}),
+              onOpenExternal: () => {
+                // learning tool 未转正，不记录访问
+              },
+              onDelete: (id) => handleDelete(id),
+              extraActions: !isConverted ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleConvert(item.id);
+                  }}
+                  disabled={!!converting[`${item.id}`]}
+                  className="text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                  title="转为正式工具"
+                >
+                  {converting[`${item.id}`] ? '...' : '转为正式'}
+                </button>
+              ) : null,
+            };
+            return <ToolCard key={item.id} data={data} actions={actions} />;
+          })}
+        </div>
+      )}
+
+      {/* article 详情/编辑弹窗（仅失败时显示 AI 重新生成按钮） */}
+      <KnowledgeDetailModal
+        data={selectedArticle}
+        onClose={() => setSelectedArticle(null)}
+        onUpdated={handleArticleUpdated}
+        onRegenerate={async (id) => {
+          await handleRegenerate(id);
+        }}
+        isFailed={
+          !!selectedArticle &&
+          selectedArticle.source === 'learning' &&
+          selectedArticle.is_ready === true &&
+          !selectedArticle.ai_summary
+        }
+      />
+
+      {/* tool 详情/编辑弹窗（仅失败时显示 AI 重新生成按钮） */}
+      <ToolDetailModal
+        data={selectedTool}
+        onClose={() => setSelectedTool(null)}
+        onUpdated={handleToolUpdated}
+        onRegenerate={async (id) => {
+          await handleRegenerate(id);
+        }}
+        isFailed={
+          !!selectedTool &&
+          selectedTool.source === 'learning' &&
+          selectedTool.is_ready === true &&
+          !selectedTool.description
+        }
+      />
     </div>
   );
 }
+
+// ========== 内联辅助组件 ==========
 
 interface TabButtonProps {
   active: boolean;

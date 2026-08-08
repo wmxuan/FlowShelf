@@ -22,6 +22,7 @@ from app.db.schemas.schemas import (
     LearningItemCreate,
     LearningItemResponse,
     LearningItemConvertRequest,
+    LearningItemUpdateRequest,
     MessageResponse,
 )
 
@@ -143,3 +144,18 @@ async def delete_learning_item(
     if not success:
         raise HTTPException(status_code=404, detail="待学习项不存在")
     return MessageResponse(message="已删除")
+
+
+@router.put("/{item_id}", response_model=LearningItemResponse)
+async def update_learning_item(
+    item_id: int,
+    request: LearningItemUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """编辑待学习项的 AI 生成内容（标题/摘要/关键观点/标签/工具描述）"""
+    service = _make_service(db)
+    update_data = request.model_dump(exclude_unset=True) or None
+    item = await service.update_item(item_id, update_data or {})
+    if not item:
+        raise HTTPException(status_code=404, detail="待学习项不存在")
+    return item

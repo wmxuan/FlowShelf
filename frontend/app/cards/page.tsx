@@ -1,17 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
-import { FileText, Sparkles, Calendar, ExternalLink, Trash2, Search, Plus } from 'lucide-react';
+import { FileText, Search, Plus } from 'lucide-react';
 import { cardsApi } from '@/services/api';
 import type { Card, SearchResult, TagCount } from '@/types';
 import AddItemModal from '@/components/AddItemModal';
-import CardDetailModal from '@/components/CardDetailModal';
-import DeleteConfirmButton from '@/components/DeleteConfirmButton';
 import SearchBar, { SearchStatus } from '@/components/SearchBar';
 import TagFilter from '@/components/TagFilter';
 import { EmptyState, CardGridSkeleton } from '@/components/StateDisplays';
 import { useListPage } from '@/hooks/useListPage';
+import KnowledgeCard, { KnowledgeCardActions } from '@/components/cards/KnowledgeCard';
+import KnowledgeDetailModal from '@/components/cards/KnowledgeDetailModal';
+import { adaptCard, type KnowledgeCardData } from '@/components/cards/shared';
 
 // SearchResult → Card 适配层：搜索态用 searchApi 返回的 SearchResult 渲染卡片，
 // 这里把搜索结果字段映射回 Card 结构，复用既有卡片渲染逻辑。
@@ -29,7 +29,7 @@ const adaptSearchResultToCard = (r: SearchResult): Card => ({
 });
 
 export default function CardsPage() {
-  const [selectedCard, setSelectedCard] = useState<Card | null>(null);
+  const [selectedCard, setSelectedCard] = useState<KnowledgeCardData | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
 
   const list = useListPage<Card>({
@@ -50,10 +50,38 @@ export default function CardsPage() {
     handleDelete, refresh, refreshTags,
   } = list;
 
-  const handleUpdated = (updated: Card) => {
-    list.setItems((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-    setSelectedCard(updated);
+  const handleView = (data: KnowledgeCardData) => {
+    setSelectedCard(data);
+  };
+
+  const handleUpdated = (updated: { id: number; source: 'learning' | 'cards'; title: string; source_url: string; ai_summary: string; key_points: string[]; ai_tags: string[]; created_at: string }) => {
+    list.setItems((prev) =>
+      prev.map((c) =>
+        c.id === updated.id
+          ? {
+              ...c,
+              title: updated.title,
+              source_url: updated.source_url,
+              ai_summary: updated.ai_summary,
+              key_points: updated.key_points,
+              ai_tags: updated.ai_tags,
+            }
+          : c
+      )
+    );
+    // 同步更新弹窗内数据
+    setSelectedCard((prev) =>
+      prev && prev.id === updated.id
+        ? { ...prev, title: updated.title, ai_summary: updated.ai_summary, key_points: updated.key_points, ai_tags: updated.ai_tags }
+        : prev
+    );
     refreshTags();
+  };
+
+  // 构建卡片 actions（知识库不暴露 AI 重新生成，仅在弹窗内编辑）
+  const cardActions: KnowledgeCardActions = {
+    onView: handleView,
+    onDelete: (id) => handleDelete(id),
   };
 
   return (
@@ -81,10 +109,7 @@ export default function CardsPage() {
         searchQuery={searchQuery}
         searchInput={searchInput}
         onInputChange={setSearchInput}
-        onSubmit={(val) => {
-          // 对应原 handleSearchSubmit：e.preventDefault() → setSearchQuery(searchInput)
-          setSearchQuery(val);
-        }}
+        onSubmit={(val) => setSearchQuery(val)}
         onClear={clearSearch}
       />
 
@@ -110,66 +135,21 @@ export default function CardsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {cards.map((card) => (
-            <div key={card.id} className="card group cursor-pointer" onClick={() => setSelectedCard(card)}>
-              <div className="mb-3 flex items-start justify-between gap-2">
-                <h3 className="card-title line-clamp-2 flex-1">{card.title}</h3>
-                <div className="flex items-center gap-1">
-                  <Link href={card.source_url} target="_blank" onClick={(e) => e.stopPropagation()}
-                    className="rounded p-1 hover:bg-muted transition-colors" title="查看原文">
-                    <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                  </Link>
-                  <DeleteConfirmButton
-                    onConfirm={() => handleDelete(card.id)}
-                    buttonClassName="rounded p-1 hover:bg-destructive/10 hover:text-destructive transition-colors"
-                    buttonTitle="删除"
-                    stopPropagation
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </DeleteConfirmButton>
-                </div>
-              </div>
-
-              {/* 摘要 */}
-              <div className="mb-3">
-                <p className="text-sm text-muted-foreground line-clamp-3">{card.ai_summary}</p>
-              </div>
-
-              {/* 关键观点 */}
-              {card.key_points && card.key_points.length > 0 && (
-                <div className="mb-3">
-                  <h4 className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
-                    <Sparkles className="h-3 w-3" />
-                    关键观点
-                  </h4>
-                  <ul className="text-xs space-y-1">
-                    {card.key_points.slice(0, 2).map((point, i) => (
-                      <li key={i} className="text-muted-foreground line-clamp-1">
-                        • {point}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* 标签和时间 */}
-              <div className="flex items-center justify-between">
-                <div className="flex flex-wrap gap-1">
-                  {(card.ai_tags || []).map((tag, i) => (
-                    <span key={i} className="badge badge-secondary text-xs">{tag}</span>
-                  ))}
-                </div>
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Calendar className="h-3 w-3" />
-                  {new Date(card.created_at).toLocaleDateString('zh-CN')}
-                </span>
-              </div>
-            </div>
+            <KnowledgeCard
+              key={card.id}
+              data={adaptCard(card)}
+              actions={cardActions}
+            />
           ))}
         </div>
       )}
 
       {/* 详情/编辑弹窗 */}
-      <CardDetailModal card={selectedCard} onClose={() => setSelectedCard(null)} onUpdated={handleUpdated} />
+      <KnowledgeDetailModal
+        data={selectedCard}
+        onClose={() => setSelectedCard(null)}
+        onUpdated={handleUpdated}
+      />
 
       {/* 新增卡片弹窗 */}
       <AddItemModal

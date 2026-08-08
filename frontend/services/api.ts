@@ -112,7 +112,7 @@ export const toolsApi = {
   get: (id: number) => apiRequest<Tool>(`/tools/${id}`),
   
   update: (id: number, data: object) =>
-    apiRequest(`/tools/${id}`, {
+    apiRequest<Tool>(`/tools/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
@@ -172,6 +172,18 @@ export const learningApi = {
   list: () => apiRequest<LearningItem[]>('/learning'),
 
   get: (id: number) => apiRequest<LearningItem>(`/learning/${id}`),
+
+  update: (id: number, data: Partial<{
+    title: string;
+    ai_summary: string;
+    key_points: string[];
+    ai_tags: string[];
+    tool_description: string | null;
+  }>) =>
+    apiRequest<LearningItem>(`/learning/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 
   delete: (id: number) =>
     apiRequest(`/learning/${id}`, { method: 'DELETE' }),

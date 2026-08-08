@@ -1,14 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { Wrench, Eye, Clock, Trash2, ExternalLink, Search, Plus } from 'lucide-react';
+import { Wrench, Search, Plus } from 'lucide-react';
 import { toolsApi } from '@/services/api';
 import AddItemModal from '@/components/AddItemModal';
-import DeleteConfirmButton from '@/components/DeleteConfirmButton';
 import SearchBar, { SearchStatus } from '@/components/SearchBar';
 import TagFilter from '@/components/TagFilter';
 import { EmptyState, ListRowSkeleton } from '@/components/StateDisplays';
 import { useListPage } from '@/hooks/useListPage';
+import ToolCard, { ToolCardActions } from '@/components/cards/ToolCard';
+import ToolDetailModal from '@/components/cards/ToolDetailModal';
+import { adaptTool, type ToolCardData } from '@/components/cards/shared';
 import type { Tool, SearchResult, TagCount } from '@/types';
 
 // SearchResult → Tool 适配层：搜索态用 searchApi 返回的 SearchResult 渲染工具列表，
@@ -27,6 +29,7 @@ const adaptSearchResultToTool = (r: SearchResult): Tool => ({
 
 export default function ToolboxPage() {
   const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedTool, setSelectedTool] = useState<ToolCardData | null>(null);
   const [sortBy, setSortBy] = useState('created_at');
 
   // toolbox 额外依赖 sortBy：变化时需要重新 fetch（useListPage extraDeps）
@@ -61,6 +64,52 @@ export default function ToolboxPage() {
     } catch (err) {
       console.error('记录访问失败:', err);
     }
+  };
+
+  const handleView = (data: ToolCardData) => {
+    setSelectedTool(data);
+  };
+
+  const handleUpdated = (updated: {
+    id: number;
+    source: 'learning' | 'toolbox';
+    title: string;
+    url: string;
+    ai_tags: string[];
+    description: string | null;
+    created_at: string;
+    visit_count?: number;
+    last_visited_at?: string | null;
+  }) => {
+    list.setItems((prev) =>
+      prev.map((t) =>
+        t.id === updated.id
+          ? {
+              ...t,
+              title: updated.title,
+              url: updated.url,
+              description: updated.description,
+            }
+          : t
+      )
+    );
+    setSelectedTool((prev) =>
+      prev && prev.id === updated.id
+        ? { ...prev, title: updated.title, url: updated.url, description: updated.description }
+        : prev
+    );
+  };
+
+  // 构建卡片 actions（工具箱不暴露 AI 重新生成，仅在弹窗内编辑）
+  const toolActions: ToolCardActions = {
+    onView: handleView,
+    onOpenExternal: (data) => {
+      // 仅 toolbox 记录访问
+      if (data.source === 'toolbox') {
+        handleVisit(data.id);
+      }
+    },
+    onDelete: (id) => handleDelete(id),
   };
 
   return (
@@ -135,112 +184,22 @@ export default function ToolboxPage() {
         />
       ) : (
         <div className="space-y-2">
-          {tools.map((tool) => {
-            // 从 URL 提取域名用于获取 favicon
-            let domain = '';
-            try {
-              domain = new URL(tool.url).hostname;
-            } catch {
-              domain = '';
-            }
-            const faviconUrl = domain
-              ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
-              : '';
-
-            return (
-              <div
-                key={tool.id}
-                className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 hover:border-primary/30 hover:shadow-sm transition-all"
-              >
-                {/* favicon */}
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/50">
-                  {faviconUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={faviconUrl}
-                      alt=""
-                      width={20}
-                      height={20}
-                      className="h-5 w-5 rounded-sm"
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).style.display = 'none';
-                        const sibling = (e.currentTarget.parentElement?.querySelector('.fallback-icon')) as HTMLElement | null;
-                        if (sibling) sibling.style.display = 'block';
-                      }}
-                    />
-                  ) : null}
-                  <Wrench
-                    className="fallback-icon h-5 w-5 text-muted-foreground"
-                    style={{ display: faviconUrl ? 'none' : 'block' }}
-                  />
-                </div>
-
-                {/* 标题 + 域名 */}
-                <div className="min-w-0 flex-1">
-                  <a
-                    href={tool.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => handleVisit(tool.id)}
-                    className="block truncate text-sm font-medium hover:text-primary transition-colors"
-                    title={tool.title}
-                  >
-                    {tool.title}
-                  </a>
-                  {domain && (
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {domain}
-                    </span>
-                  )}
-                </div>
-
-                {/* 标签 */}
-                <div className="hidden sm:flex shrink-0 items-center gap-1">
-                  {(tool.ai_tags || []).slice(0, 3).map((tag, i) => (
-                    <span key={i} className="badge badge-secondary text-xs">{tag}</span>
-                  ))}
-                </div>
-
-                {/* 访问次数 */}
-                <span className="hidden md:flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                  <Eye className="h-3.5 w-3.5" />
-                  {tool.visit_count}
-                </span>
-
-                {/* 最后访问时间 */}
-                {tool.last_visited_at && (
-                  <span className="hidden lg:flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                    <Clock className="h-3.5 w-3.5" />
-                    {new Date(tool.last_visited_at).toLocaleDateString('zh-CN')}
-                  </span>
-                )}
-
-                {/* 操作按钮 - 默认显示 */}
-                <div className="flex shrink-0 items-center gap-1">
-                  <a
-                    href={tool.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => handleVisit(tool.id)}
-                    className="rounded p-1.5 hover:bg-muted transition-colors"
-                    title="打开并记录访问"
-                  >
-                    <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                  </a>
-                  <DeleteConfirmButton
-                    onConfirm={() => handleDelete(tool.id)}
-                    buttonClassName="rounded p-1.5 hover:bg-destructive/10 hover:text-destructive transition-colors"
-                    buttonTitle="删除"
-                    confirmText="确认删除这个工具吗？"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </DeleteConfirmButton>
-                </div>
-              </div>
-            );
-          })}
+          {tools.map((tool) => (
+            <ToolCard
+              key={tool.id}
+              data={adaptTool(tool)}
+              actions={toolActions}
+            />
+          ))}
         </div>
       )}
+
+      {/* 详情/编辑弹窗 */}
+      <ToolDetailModal
+        data={selectedTool}
+        onClose={() => setSelectedTool(null)}
+        onUpdated={handleUpdated}
+      />
 
       {/* 添加工具弹窗 */}
       <AddItemModal

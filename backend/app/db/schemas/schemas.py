@@ -293,3 +293,13 @@ class LearningItemConvertRequest(BaseModel):
     ai_tags: Optional[List[str]] = None
     tool_description: Optional[str] = None
     item_type: Optional[str] = None
+
+
+class LearningItemUpdateRequest(BaseModel):
+    """编辑待学习项的 AI 生成内容（供 convert 时透传）"""
+
+    title: Optional[str] = None
+    ai_summary: Optional[str] = None
+    key_points: Optional[List[str]] = None
+    ai_tags: Optional[List[str]] = None
+    tool_description: Optional[str] = None
