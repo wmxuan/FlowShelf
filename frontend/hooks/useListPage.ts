@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import type { SearchResult } from '@/types';
-import { searchApi } from '@/services/api';
+import { searchApi, SEARCH_DEFAULT_LIMIT } from '@/services/api';
 
 export interface FetchListOptions {
   tag?: string;
@@ -94,7 +94,7 @@ export function useListPage<T, ListOptions extends FetchListOptions = FetchListO
       try {
         const query = opts.query?.trim();
         if (query) {
-          const resp = await searchApi.semantic(query, searchType, 50);
+          const resp = await searchApi.semantic(query, searchType, SEARCH_DEFAULT_LIMIT);
           setItems(resp.results.map(adaptSearchResult));
         } else {
           const data = await fetchList(opts);
