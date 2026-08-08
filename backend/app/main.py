@@ -12,6 +12,8 @@ from app.api.routes.cards import router as cards_router
 from app.api.routes.tools import router as tools_router
 from app.api.routes.search import router as search_router
 from app.api.routes.classify import router as classify_router
+from app.api.routes.tabs import router as tabs_router
+from app.api.routes.learning import router as learning_router
 
 
 @asynccontextmanager
@@ -58,6 +60,8 @@ def create_app() -> FastAPI:
     app.include_router(tools_router)
     app.include_router(search_router)
     app.include_router(classify_router)
+    app.include_router(tabs_router)
+    app.include_router(learning_router)
 
     @app.get("/api/health")
     async def health_check():

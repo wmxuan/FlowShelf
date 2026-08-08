@@ -182,6 +182,48 @@
   color: #4338ca;
 }
 
+/* ============ URL 预览（快速收藏） ============ */
+
+.fs-url-preview {
+  padding: 10px 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.fs-url-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fs-url-domain {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+/* ============ 提示文案 ============ */
+
+.fs-hint {
+  padding: 8px 12px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.fs-success-enrich {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
 /* ============ 预览区 ============ */
 
 .fs-preview {
@@ -426,4 +468,267 @@
   font-size: 12px;
   color: #059669;
   text-align: center;
+}
+
+/* ============ 视图切换 Tabs ============ */
+
+.fs-view-tabs {
+  display: flex;
+  gap: 2px;
+  background: #f3f4f6;
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 12px;
+}
+
+.fs-view-tab {
+  flex: 1;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.fs-view-tab.active {
+  background: #ffffff;
+  color: #6366f1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* ============ Tab 统计条 ============ */
+
+.fs-tab-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #ffffff;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.fs-tab-stats strong {
+  color: #6366f1;
+  font-weight: 600;
+}
+
+.fs-tab-refresh {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.fs-tab-refresh:hover {
+  background: #f3f4f6;
+}
+
+/* ============ Tab 分组列表 ============ */
+
+.fs-tab-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fs-tab-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.fs-tab-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  user-select: none;
+}
+
+.fs-tab-group-header:hover {
+  background: #f9fafb;
+}
+
+.fs-tab-group-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.fs-tab-group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  background: #eef2ff;
+  color: #4338ca;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fs-tab-group-chevron {
+  font-size: 11px;
+  color: #9ca3af;
+  transition: transform 0.15s;
+}
+
+.fs-tab-group-chevron.open {
+  transform: rotate(90deg);
+}
+
+.fs-tab-group-body {
+  border-top: 1px solid #f3f4f6;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.fs-tab-group-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 12px;
+  color: #374151;
+  border-bottom: 1px solid #f9fafb;
+}
+
+.fs-tab-group-item:last-child {
+  border-bottom: none;
+}
+
+.fs-tab-group-item:hover {
+  background: #f3f4f6;
+}
+
+.fs-tab-group-item-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.fs-tab-group-item-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.fs-tab-group-item-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: #9ca3af;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.fs-tab-group-item-close:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.fs-tab-group-actions {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  background: #fafafa;
+  border-top: 1px solid #f3f4f6;
+}
+
+.fs-tab-group-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.fs-tab-group-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.fs-tab-group-btn.primary {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: #ffffff;
+}
+
+.fs-tab-group-btn.primary:hover {
+  background: #5558e3;
+  border-color: #5558e3;
+}
+
+.fs-tab-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  color: #6b7280;
+}
+
+.fs-tab-empty-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.fs-tab-empty-msg {
+  font-size: 13px;
+}
+
+.fs-tab-regen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  gap: 4px;
+  font-size: 12px;
+  color: #6366f1;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.fs-tab-regen:hover {
+  background: #eef2ff;
 }

@@ -20,6 +20,13 @@
 - **后续改进**：
 ```
 
+"开发思路实录"章节用叙事格式，记录完整思考链路：
+
+```
+### 案例 N：标题（日期）
+**功能背景** → **异常表现** → **觉得不合理** → **调研步骤** → **与 AI 交流决策** → **实施验证** → **反思**
+```
+
 ---
 
 ## 日志记录
@@ -109,6 +116,84 @@
 - **理由分析**：当前 deepseek 无 Embedding API，`_safe_embedding` 降级为无语义的 hash 向量，无法做真正的语义相似度。字符串相似度零依赖、立即可用，能覆盖 60-70% 同义标签（"SQL" / "SQL语言"）。`_similarity` 设计为可替换函数，Embedding 服务接入后升级为余弦相似度即可
 - **影响范围**：`tag_service.py`（新建）、`card_service` / `tool_service` 建卡/建工具流程
 - **未做**：Phase C 定期聚类 + 低频清理（待挂到周报任务）
+
+### [2026-08-07] 三处搜索逻辑统一为单一 /api/search API
+
+- **决策类型**：架构重构 / 技术选型
+- **问题描述**：三个搜索入口（卡片库 `/cards`、工具箱 `/toolbox`、顶部 `/search`）用两套不同算法——卡片库/工具箱走 `/api/cards?q=`、`/api/tools?q=` 纯关键词（jieba+子串），顶部走 `/api/search` 混合检索（向量0.7+关键词0.3）。搜「智谱」三处结果数不一致（2/0/6），用户无法预期哪个是"正确"结果
+- **决策内容**：合并为单一 `/api/search` API，通过 `type` 参数（card/tool/all）区分；移除 `/api/cards`、`/api/tools` 的 `q` 参数，回归"纯列表+筛选"职责；SearchResult schema 扩展 4 个 Optional 字段（key_points/created_at 给 card，visit_count/last_visited_at 给 tool）；前端搜索态改调 searchApi + 适配层映射回 Card/Tool 复用渲染
+- **理由分析**：
+  1. **一致性**：搜索逻辑只在 SearchService 一处，天然保证三处结果一致
+  2. **职责清晰**：`/api/cards`、`/api/tools` 不再承担搜索，只做列表+标签/天数筛选
+  3. **可维护**：未来升级（如加 Cross-Encoder 重排）改一处全局生效
+  4. **向后兼容**：适配层复用既有渲染组件，渲染层零改动
+- **备选方案**：把混合检索逻辑下沉到 CardService/ToolService（否决：重复代码，且两处都要改才能保证一致）
+- **影响范围**：8 文件——后端 `schemas.py`/`search_service.py`/`cards.py`+`card_service.py`/`tools.py`+`tool_service.py`；前端 `types/index.ts`/`api.ts`/`cards/page.tsx`/`toolbox/page.tsx`
+- **验证**：浏览器三处搜「智谱」，卡片库=3、工具箱=3、顶部=6（3+3），三处一致 ✅。完整思考链路见"开发思路实录"案例 1
+
+### [2026-08-07] Chrome MV3 扩展脚手架 + 4 入口职责划分
+
+- **决策类型**：技术选型 / 架构
+- **决策内容**：Chrome MV3（非 Plasmo，避免额外框架），用 Vite + TypeScript + React 纯手写。4 入口职责划分：`action.default_popup`（快速收藏+Tab 归组，双视图）、`chrome_url_overrides.newtab`（纯跳板重定向 Web `/tabs`，Chrome 不允许直接指外部 URL）、`content_scripts.bridge.ts`（仅注入 localhost:3000 / \*.flowshelf.app，做 Web ↔ chrome.tabs 消息桥）、`background.service_worker`（右键菜单+快捷键+书签双写）
+- **理由分析**：
+  - MV3 是未来方向，直接用原生；Plasmo 等框架后续再迁不影响业务代码
+  - NewTab 纯重定向：把"Tab 管理主界面"放在 Web 应用，避免扩展内复制一套 React/Tailwind
+  - Bridge 注入域仅白名单，不注入任意网页，合规+安全
+- **影响范围**：`flowshelf-extension/` 新建目录（manifest+5 src 子目录）
+- **CORS 特殊处理**：后端 `allow_origin_regex=r"chrome-extension://.*"`，开发期扩展 ID 不稳定，不用硬编码
+
+### [2026-08-07] 快速收藏"先保存后生成"（方案 C）：asyncio.create_task 独立 DB 会话
+
+- **决策类型**：交互体验 / 并发架构
+- **问题描述**：popup 点击"保存"若同步等待 AI 生成摘要/标签（3-5s），用户体验不可接受
+- **决策内容**：POST `/api/learning` 只写入轻量记录（source*url+title+原始正文），<500ms 返回；AI 内容补全通过 `asyncio.create_task(_ai_enrich(item_id, content, item_type))` 后台异步执行。**核心技术点**：后台任务创建独立 `async_sessionmaker(engine, class*=AsyncSession, expire_on_commit=False)` 新会话，不依赖请求生命周期内的 db session（否则请求结束 session 关闭导致 commit 失败）
+- **理由分析**：方案 A "同步等 AI"体验差；方案 B "前端轮询先拿到占位再等"仍需多次往返；方案 C 后端异步最干净，popup 立刻显示"已收藏"，后台默默补全，前端暂存区 `is_ready=False` 显示"AI 生成中"，5s 轮询静默刷新后出现 AI 结果
+- **影响范围**：`learning_service.py` 的 `create_item` + `_ai_enrich`（独立 session_maker）、`learning.py` 路由、暂存区页 5s 静默轮询、popup 保存逻辑
+
+### [2026-08-07] 正文提取优先走扩展端预提取（content script 注入 innerText）
+
+- **决策类型**：技术选型 / 反爬规避
+- **问题描述**：后端 `content_extractor.extract` 用 httpx 抓取，遇到 JS 渲染、登录墙、重定向循环（TooManyRedirects）、反爬 UA 封禁经常失败
+- **决策内容**：所有需要正文的链路（智能分流 classify、快速收藏 learning、Tab 单卡收卡、书签双写）都**优先传扩展端预提取的 content**——扩展端通过 `chrome.scripting.executeScript` 注入当前 Tab 的 `document.body.innerText.slice(0, 50000)`；后端抓到失败时降级为 url+title 不阻断流程
+- **理由分析**：这是浏览器扩展形态相对纯 Web 的**结构性优势**——Chrome 已经拿到了渲染完成的 DOM，不需要后端重新请求一遍 + 处理登录态 + 对抗反爬。50K 字截断已覆盖 99% 的单篇文章（约 30-50 页）。DeepSeek 输入 128K 上下文，50K 字约 10K tokens，绰绰有余
+- **影响范围**：`flowshelf-extension/src/lib/content-extractor.ts`（新建）、`classify.py` 路由 request.content 分支、`CardCreate.content` 字段 + `cards.py` 路由、`LearningItemCreate.content` 字段 + `learning.py` 路由、popup/background 各收藏入口
+
+### [2026-08-07] Content Script Bridge：Web 页拿到 chrome.tabs API 的可行方案
+
+- **决策类型**：架构（跨边界通信）
+- **问题描述**：Web 应用的 Tab 管理页 `/tabs` 需要实时获取当前所有 Tab 列表、关闭 Tab、激活 Tab、提取 Tab 正文。但 Web 页面受浏览器沙箱限制，无法直接调用 chrome.tabs API
+- **决策内容**：扩展 content script 在 localhost:3000 和 \*.flowshelf.app 注入 bridge.ts，做双向消息桥：
+  - Web → Bridge：`window.postMessage({type:'flowshelf:action', action:'getAllTabs', ...}, '*')`
+  - Bridge → Background：`chrome.runtime.sendMessage`
+  - Background → chrome.tabs.query / remove / update / executeScript
+  - 结果沿原路返回
+  - 桥空兜底：Web 端首次 `getAllTabs()` 为空，等 1s 重试一次（Service Worker 刚唤醒延迟）
+- **理由分析**：
+  - 方案 A "Tab 管理页放到扩展 newtab 内做"，意味着要在扩展内重写一套 React+Tailwind+API 封装 + 分组组件，重复成本极高
+  - 方案 B（本方案）"Web 页 + Bridge"：Web 端界面 0 重复，Bridge 仅 ~50 行代码
+  - 注入域严格白名单（localhost/flowshelf.app），不影响任何第三方网页
+- **影响范围**：`flowshelf-extension/src/content/bridge.ts`（新建）+ `frontend/lib/chrome-bridge.ts`（Web 端封装：getAllTabs/closeTab/activateTab/getTabContent/checkBridgeAvailable/onTabEvent）+ `tabs/page.tsx` 所有 Tab 操作
+
+### [2026-08-07] 书签双写：尊重用户习惯的 0 迁移成本同步
+
+- **决策类型**：产品交互
+- **决策内容**：不替代原生收藏，而是追加监听。background 监听 `chrome.bookmarks.onCreated` → 3s Map 去抖（避免 Chrome 同步重复触发 DEDUP_WINDOW_MS=3000）→ 同步 POST `/api/learning` → `chrome.notifications` 推送"已同步到 FlowShelf 待学习队列"结果。**不删除原生书签**，FlowShelf 只追加
+- **理由分析**：
+  - 用户有长年积累的 ⭐️ 肌肉记忆。替代它意味着"教育用户改习惯"，迁移成本极高
+  - 双写 0 成本：用户"按以往习惯点 ⭐️"，FlowShelf 自动同步，不需要任何动作
+  - 去抖 3s：经验值，实测 Chrome 在跨设备同步时可能在 2s 内对同一书签触发 2 次 onCreated
+- **影响范围**：`background/index.ts` 书签事件监听 + 去抖 Map + 通知、`learning.py` 快速保存路由
+
+### [2026-08-07] 三池流动中间层 LearningItem：Tab → 待学习 → 卡片/工具
+
+- **决策类型**：数据模型 / 流程设计
+- **决策内容**：新增 `learning_queue` 表（模型 `LearningItem`），作为"快速收藏"→"正式沉淀"的中间流动层。字段：`source_url / title / item_type(article|tool) / content / ai_summary / key_points / ai_tags / tool_description + is_ready(AI 是否补全) + is_converted(是否已转卡片/工具) + converted_id(转换后的 ID) + embedding + 时间戳`。流转规则：快速收藏 → 写 learning_queue（is_ready=False, is_converted=False）→ AI 异步补全 is_ready=True → 用户在 Web 暂存区点"生成知识卡片/加入工具箱"→ convert 写入 Card/Tool → is_converted=True + converted_id=新 ID（learning_queue 记录保留作流转历史，不删除）
+- **理由分析**：
+  1. **价值门槛落地**：PRD 决策 7"读+生成卡片才进知识库"——待学习队列是"未读"池，knowledge card 是"已沉淀"池，中间必须有门槛；LearningItem 就是门槛载体
+  2. **快速收藏（<500ms）可行**：若直接写 Card/Tool 表，空 title/summary 的垃圾数据会污染知识库；LearningItem 隔离未完成状态
+  3. **失败重试/手动 enrich**：AI 异步补全失败时，learning_queue 保留 URL+content，用户手动触发 `POST /{id}/enrich` 就能重跑，无需重新收藏
+  4. **流转历史**：is_converted 字段可统计"待学习 → 已沉淀"转化率，后续做周报数据支撑
+- **影响范围**：`models.py` LearningItem 模型、`schemas.py` LearningItemCreate/Response/ConvertRequest、`learning.py` 6 个端点、`learning_service.py` 服务层、暂存区页 `/learning`（list + convert）
 
 ---
 
@@ -282,6 +367,89 @@
 - **影响范围**：`local_embedding.py`、`base.py`（generate_embedding 签名加 is_query）、`search_service.py`
 - **后续改进**：回填脚本跑完后所有向量统一 512 维，校验逻辑可简化但保留作防御
 
+### [2026-08-07] 三处搜索框结果不一致（搜索逻辑统一）
+
+- **决策类型**：踩坑记录 / 架构重构
+- **问题描述**：搜「智谱」，卡片库 `/cards`=2 条、工具箱 `/toolbox`=0 条、顶部 `/search`=6 条，三处结果数完全不一致。工具箱搜「智谱」=0 但顶部能搜出 3 个工具，说明不是"没有相关工具"而是搜索算法漏掉
+- **原因**：Day1 真语义搜索改造只升级了 `/api/search`（SearchService 混合检索），但 `/api/cards`、`/api/tools` 的 `q` 参数仍走旧的 `keyword_score` 纯关键词路径。卡片库/工具箱页面调 `cardsApi.list({q})`/`toolsApi.list({q})`（带 q），不是 `searchApi`，没享受到语义检索。三处搜索逻辑散落在三个 service，"局部升级"遗漏了另两处
+- **解决方案**：合并为单一 `/api/search` API + type 参数区分（card/tool/all）；移除 `/api/cards`、`/api/tools` 的 q 参数；SearchResult 扩展 key_points/created_at/visit_count/last_visited_at 4 个 Optional 字段；前端搜索态改调 searchApi + 适配层映射回 Card/Tool。详见"日志记录"2026-08-07 决策条目
+- **影响范围**：8 文件（后端 4 + 前端 4）
+- **教训**：同一能力的多个入口要做"一致性验收"，不能只验单个入口能用。搜索逻辑散落多处是根因，统一到单一 service 后未来升级改一处全局生效
+
+### [2026-08-07] asyncio.create_task 复用请求 session → 后台 commit 失败（静默丢数据）
+
+- **决策类型**：踩坑记录 / 并发架构
+- **问题描述**：初版 `learning_service.create_item` 把 FastAPI 依赖注入的 db session 直接传给 `asyncio.create_task` 的后台任务。接口返回 200 OK，看起来成功，但后台任务执行 `await bg_db.commit()` 时实际抛 `ResourceClosedError` / `StatementError`：请求已结束，session 已被 middleware 关闭，AI 补全结果无法持久化
+- **原因**：AsyncSession 的生命周期严格绑定请求上下文，请求一结束就自动 close/expunge，不能传递给另一个 task；接口同步返回 vs 后台异步 commit 的时序竞态**表面成功，实际静默丢失数据**，非常隐蔽
+- **解决方案**：后台任务用 `async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)` 自己创建独立会话，`async with session_maker() as bg_db:` 包住所有 DB 操作，成功后 `await bg_db.commit()` 由内部上下文控制生命周期。**FastAPI 后台异步 DB 操作的固定写法**
+- **影响范围**：`learning_service.py` 的 `_ai_enrich` 方法完全重写
+- **教训**："异步任务不能复用请求生命周期内的 DB 会话"是异步编程基础坑，但实践中第一次遇到极其隐蔽——接口返回 200 会误导你认为成功。开发规范：任何 `create_task`/`BackgroundTasks` 中涉及 DB，一律新开独立 session
+
+### [2026-08-08] Chrome Bridge 首次调用 getAllTabs 返回空（SW 唤醒延迟竞态）
+
+- **决策类型**：踩坑记录 / 跨边界通信
+- **问题描述**：直接打开 `/tabs`（Tab 管理页）首次调用 `getAllTabs` 返回空数组 `[]`，等 1-2s 再手动刷新又正常显示所有 Tab
+- **原因**：两条链的延迟叠加——(1) Chrome MV3 service_worker 默认休眠，首次 chrome.runtime.sendMessage 需要 ~500ms 唤醒；(2) content script 虽然 document_start 注入，但 bridge 初始化完转发消息有极小时序竞态，首个请求可能在转发通道就绪前到达
+- **解决方案**：`tabs/page.tsx` 加兜底：首次 `allTabs.length === 0` → 再等 1s 重试一次（**只重试 1 次**，避免用户没装扩展时死循环）。后续可升级为 "Bridge:ready" 握手消息做严格时序保证
+- **影响范围**：`tabs/page.tsx` 开头 `loadAndGroupTabs`
+- **教训**：任何跨进程通信（Web ↔ Content Script ↔ Background SW）都要考虑首次唤醒延迟/时序竞态，不能假设第一次调用一定成功
+
+---
+
+## 开发思路实录
+
+> 本节记录"从发现异常到最终解决"的完整思考链路：开发什么功能 → 出现什么 bug/表现 → 觉得哪里不合理 → 调研步骤 → 与 AI 交流决策 → 实施验证 → 反思。区别于"踩坑记录"的结论导向，本节沉淀的是**调试方法论与决策依据**，还原"为什么这么改"的思考过程。
+
+### 案例 1：三处搜索框结果不一致（2026-08-07）
+
+**功能背景**：Day1 落地真语义搜索后，产品有三个搜索入口——卡片库 `/cards`、工具箱 `/toolbox`、顶部 Header 全局搜索 `/search`。期望用户在任何入口搜同一关键词得到一致结果。
+
+**异常表现**：用「智谱」验收，三处结果数完全不一致——卡片库=2、工具箱=0、顶部=6。
+
+**觉得不合理**：(1) 同一产品三处搜索结果不一致，用户无法预期哪个"正确"；(2) 工具箱=0 但顶部能搜出 3 个工具，说明不是"没有相关工具"而是算法漏掉；(3) 卡片库 2 条 ≠ 顶部 card tab 3 条。
+
+**调研步骤**：逐个入口追踪代码路径，定位到三处用了两套算法——卡片库/工具箱走 `/api/cards?q=`、`/api/tools?q=` 纯关键词（jieba+子串），顶部走 `/api/search` 混合检索（向量0.7+关键词0.3）。根因是 Day1 升级语义搜索时只改了 `/api/search`，没回头检查另两个入口的 q 参数。同时发现字段差异约束：SearchResult 缺 key_points/created_at（卡片库渲染需要）和 visit_count/last_visited_at（工具箱渲染需要）。
+
+**与 AI 交流决策**：讨论了两个方案——A 三处都改调 searchApi + 扩展字段；B 混合检索下沉到 CardService/ToolService。选 A，理由是搜索逻辑只保留一份天然保证一致，下沉会重复代码。字段差异用 SearchResult 扩展 4 个 Optional 字段 + 前端适配层映射回 Card/Tool 复用渲染解决。
+
+**实施验证**：8 文件改动（后端 4 + 前端 4），uvicorn 加 `--reload` 重启，浏览器三处搜「智谱」——卡片库=3、工具箱=3、顶部=6（3+3），三处一致 ✅，扩展字段正确渲染 ✅。完整实施细节见 [FlowShelf*Day2*开发记录.md](FlowShelf_Day2_开发记录.md) 第五节。
+
+**反思**：(1) Day1"局部升级"的盲区——升级一个能力要检查所有入口是否都受益；(2) 结果数从 2→3、0→3 增多符合预期（混合检索命中语义相关但字面无关的结果）；(3) 适配层取舍——复用渲染 vs 字段映射维护成本，当前字段稳定划算；(4) 教训：同一能力的多入口必须做"一致性验收"。
+
+### 案例 2：快速收藏的响应式瓶颈——同步等 AI 还是先存后生成（2026-08-07/08）
+
+**功能背景**：popup 是用户浏览网页时随手调用的快速收藏入口。典型流程：用户点 FlowShelf 图标 → popup 展示当前页面信息 + AI 建议类型（卡片/工具）→ 用户确认 → 保存。
+
+**异常表现**：初版按"同步生成"设计——点击保存后直接调 `cardsApi.create(url)` 走完整链路：后端抓正文→AI 生成摘要/标签→写 DB。实测耗时 3-5s（DeepSeek API），popup 长时间停在 loading，用户体验很差。
+
+**觉得不合理**：(1) 3-5s 的交互等待不可接受，"随手收藏"应该是"点一下就走"；(2) 正文抽取 + AI 生成的耗时不是 FlowShelf 能控制的，不能把用户拴在 loading 上。
+
+**调研步骤**：与 AI 交流三个方案——A. 同步等 AI（UI 给 loading 动画）；B. 前端先拿到占位 ID 再轮询；C. 先写 DB 轻量记录，AI 后台异步补全，Web 端单独展示"AI 生成中"状态。
+
+**与 AI 交流决策**：选 C——新增 `learning_queue` 流动中间层（`LearningItem` 模型），快速收藏只存 URL+title+content（<500ms 返回），AI 用 `asyncio.create_task` 后台独立 DB 会话补全；Web 暂存区页展示 `is_ready`/`is_converted` 两个状态；最后用户手动 convert 入卡片/工具库。**这个方案顺便把 PRD 的"价值门槛"（待学习→已沉淀必须读+生成）和"失败重试"（手动 POST `/{id}/enrich`）一次性落地，一石三鸟。**
+
+**实施验证**：首次写 `_ai_enrich` 踩了"复用请求 session"的坑（见踩坑记录），修复为独立 session_maker 后实测 popup 保存 150-300ms 返回 ✅，暂存区页面 5s 轮询静默刷新，AI 补全后 UI 平滑过渡 ✅；书签双写链路也走 learning_queue，用户点 ⭐️ 不感知任何延迟。
+
+**反思**：(1) "先保存后生成"的关键不仅是异步，更重要的是引入**三池流动中间层**——LearningItem 把"快速收藏的未完成态"从知识库隔离，同时赋予价值门槛和失败重试两个衍生能力，一石三鸟。(2) 异步 DB 操作的 session 生命周期是高风险点，需要把"独立 session_maker + async with"的模式固化成开发规范。
+
+### 案例 3：Web 页做 Tab 管理的结构性死穴——Content Script Bridge 选型（2026-08-08）
+
+**功能背景**：PRD 定义 Tab 管理是浏览器扩展的核心能力——AI 归组、快速关闭重复 Tab、一键收卡、行为排序。MVP 期望有一个专门的 `/tabs` 页面承载这些操作。
+
+**出现的结构性死穴**：Tab 列表来源于 `chrome.tabs.query`，Web 页面受浏览器同源沙箱限制，拿不到任何浏览器内部 API。如果 Tab 管理页做在 Web 应用里（如 `/tabs`），**没有任何常规办法让页面获取当前 Tab 列表**。
+
+**调研步骤**：与 AI 讨论两种方案——
+
+- 方案 A：Tab 管理页放到扩展 newtab 内做（或 popup 内扩展视图）。优点：直接调 chrome.tabs，无通信层；缺点：需要在扩展内用 Vite + 原生 React 重写一套 Tailwind/组件/API 封装 + Tab 分组 UI，与 Web 应用现有组件不能复用，维护成本 ×2，后期主题/样式同步要改两处。
+
+- 方案 B：Tab 管理页做在 Web 应用 `/tabs`，通过 content script 做消息桥。优点：Web 端 0 重复，直接复用现有 Tailwind / Header / 筛选组件 / API 封装 / 样式体系；缺点：需要写 bridge 层，跨进程通信有时序/唤醒延迟问题。
+
+**与 AI 交流决策**：选 B。理由：(1) 代码重复的长期维护成本远高于写 bridge 层的一次性成本；(2) MVP 阶段 UI/UX 会频繁调整，Web 应用统一改更高效；(3) Bridge 代码极简——content script 只做转发（`window.postMessage` ↔ `chrome.runtime.sendMessage`），Web 端封装 `getAllTabs/closeTab/activateTab/getTabContent` 四个函数 + `checkBridgeAvailable` 检查。注入域严格白名单 localhost:3000 / \*.flowshelf.app，安全风险可忽略。
+
+**实施验证**：实际编码 `bridge.ts` + `chrome-bridge.ts` 约 100 行。首次遇到"getAllTabs 返回空数组"踩坑（见踩坑记录：SW 唤醒延迟），加"空结果等 1s 重试一次"兜底。最终 Tab 管理页成功显示实时 Tab 列表、支持关闭/激活/分组/提取/收卡，所有操作响应 <100ms，用户体验与原生一致。
+
+**反思**：(1) 遇到结构性死穴（Web 拿不到 chrome.tabs），先问"能不能用扩展的能力搭桥"，不要直接退回到"那就做两套 UI"；(2) "Bridge 模式"在边界打通时非常通用——任何"运行在两个不同上下文中的代码组件需要互通"都可以借鉴：定义消息类型 → 一端 postMessage → 中间层转发 → 另一端调用真实 API → 结果原路返回 → 在 Web 端封装成 Promise 风格的同步 API（内部用 `window.addEventListener('message')` + 请求 ID 匹配 resolve）。(3) Chrome MV3 service worker 休眠是必须考虑的边界情况，任何 bridge 第一次调用都要有兜底重试/超时提示。
+
 ---
 
 ## 成本/延迟数据
@@ -356,11 +524,13 @@
 
 ## 版本历史
 
-| 版本 | 日期       | 变更说明                                                                                |
-| ---- | ---------- | --------------------------------------------------------------------------------------- |
-| v0.1 | 2026-08-06 | 初始版本，记录项目启动阶段的决策                                                        |
-| v0.2 | 2026-08-06 | 追加真语义搜索改造的踩坑与决策（bge-small-zh 本地化、版本冲突、SQLite 迁移、维度校验）  |
-| v0.3 | 2026-08-07 | Prompt v1.0 迭代（字数硬约束+反罗列+自检）、质量评估体系（5×3 维度）、成本/延迟实测数据 |
+| 版本 | 日期       | 变更说明                                                                                                                                                                                                                                                                                  |
+| ---- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| v0.1 | 2026-08-06 | 初始版本，记录项目启动阶段的决策                                                                                                                                                                                                                                                          |
+| v0.2 | 2026-08-06 | 追加真语义搜索改造的踩坑与决策（bge-small-zh 本地化、版本冲突、SQLite 迁移、维度校验）                                                                                                                                                                                                    |
+| v0.3 | 2026-08-07 | Prompt v1.0 迭代（字数硬约束+反罗列+自检）、质量评估体系（5×3 维度）、成本/延迟实测数据                                                                                                                                                                                                   |
+| v0.4 | 2026-08-07 | 三处搜索逻辑统一为单一 /api/search API（决策+踩坑）、新增"开发思路实录"章节（案例 1）                                                                                                                                                                                                     |
+| v0.5 | 2026-08-08 | Phase 2 启动：Chrome MV3 扩展脚手架+4 入口职责划分、LearningQueue 流动中间层、快速收藏先存后生成（独立 session）、正文预提取规避反爬、Content Script Bridge 打通 Web↔chrome.tabs、书签双写 0 迁移、Tab 管理页+暂存区页+Bookmarklet 页+Header 四大入口。开发思路实录 +案例 2/3，踩坑 +2 条 |
 
 ---
 

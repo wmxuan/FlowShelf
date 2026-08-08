@@ -2,8 +2,8 @@ import React, { useState, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import {
   classifyApi,
-  cardsApi,
-  toolsApi,
+  learningApi,
+  tabsApi,
   getApiBase,
   setApiBase,
   getWebBase,
@@ -12,26 +12,25 @@ import {
   DEFAULT_WEB_BASE,
 } from "@/lib/api";
 import { extractPageContent } from "@/lib/content-extractor";
-import type { TabInfo, CardPreview, ToolPreview, PageType } from "@/lib/types";
+import type { TabInfo, LearningItem } from "@/lib/types";
 import "./popup.css";
 
-// ============ 调试日志 ============
 console.log("[FlowShelf] Popup script loaded");
-console.log("[FlowShelf] Default API base:", DEFAULT_API_BASE);
 
 type Phase =
   | "loading"
-  | "preview"
-  | "switching"
+  | "ready"
   | "saving"
   | "success"
   | "error"
   | "settings"
   | "invalid-page";
 
+type ViewMode = "collect" | "tabs";
+
 type CollectType = "card" | "tool";
 
-function classifyToCollectType(type: PageType): CollectType {
+function classifyToCollectType(type: string): CollectType {
   return type === "tool" ? "tool" : "card";
 }
 
@@ -40,91 +39,71 @@ function isCollectible(url: string): boolean {
 }
 
 export default function Popup() {
-  // ---- 核心状态 ----
+  const [viewMode, setViewMode] = useState<ViewMode>("collect");
   const [phase, setPhase] = useState<Phase>("loading");
-  const [loadingMsg, setLoadingMsg] = useState("正在获取页面信息...");
-
   const [tabInfo, setTabInfo] = useState<TabInfo | null>(null);
   const [collectType, setCollectType] = useState<CollectType>("card");
   const [aiSuggestedType, setAiSuggestedType] = useState<CollectType>("card");
-
-  // 预览缓存（按类型缓存，切换时避免重复生成）
-  const [cardData, setCardData] = useState<CardPreview | null>(null);
-  const [toolData, setToolData] = useState<ToolPreview | null>(null);
-
-  // 浏览器端预提取的页面正文（document.body.innerText）
-  // 传给后端跳过 content_extractor，规避反爬 / 重定向循环
   const [pageContent, setPageContent] = useState("");
-
-  // 可编辑字段
-  const [editTitle, setEditTitle] = useState("");
-  const [editSummary, setEditSummary] = useState("");
-  const [editKeyPoints, setEditKeyPoints] = useState("");
-  const [editDescription, setEditDescription] = useState("");
-
-  // 错误 & 成功
   const [error, setError] = useState("");
-  const [savedType, setSavedType] = useState<CollectType>("card");
+  const [savedItem, setSavedItem] = useState<LearningItem | null>(null);
 
-  // 设置
   const [settingsUrl, setSettingsUrl] = useState(DEFAULT_API_BASE);
   const [settingsWebUrl, setSettingsWebUrl] = useState(DEFAULT_WEB_BASE);
   const [settingsMsg, setSettingsMsg] = useState("");
 
-  // ============ 初始化流程：获取标签 → 分类 → 生成预览 ============
-  useEffect(() => {
-    initFlow();
-  }, []);
+  // Tab 视图状态
+  const [allTabs, setAllTabs] = useState<chrome.tabs.Tab[]>([]);
+  const [tabGroups, setTabGroups] = useState<import("@/lib/types").TabGroup[]>([]);
+  const [groupCount, setGroupCount] = useState(0);
+  const [tabLoading, setTabLoading] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
+  const [tabError, setTabError] = useState("");
 
-  async function initFlow() {
+  // ============ 初始化：获取当前 Tab + 快速分类 ============
+  useEffect(() => {
+    if (viewMode === "collect") {
+      initQuickCollect();
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (viewMode === "tabs") {
+      fetchAndGroupTabs();
+    }
+  }, [viewMode]);
+
+  async function initQuickCollect() {
+    setPhase("loading");
     try {
-      console.log("[FlowShelf] initFlow started");
-      // Step 1: 获取当前标签页
-      setLoadingMsg("正在获取页面信息...");
       const [tab] = await chrome.tabs.query({
         active: true,
         currentWindow: true,
       });
-      console.log("[FlowShelf] Active tab:", tab?.url, tab?.title);
       if (!tab?.url || !isCollectible(tab.url)) {
-        console.log("[FlowShelf] Page not collectible:", tab?.url);
         setPhase("invalid-page");
         return;
       }
       setTabInfo({ url: tab.url, title: tab.title || "" });
 
-      // Step 1.5: 浏览器端预提取页面正文，传给后端跳过 content_extractor
-      // 规避反爬 / 重定向循环（TooManyRedirects）。提取失败返回空串，
-      // 后端会降级为自行抓取，不阻断流程。
-      setLoadingMsg("正在提取页面正文...");
-      const content = tab.id != null ? await extractPageContent(tab.id) : "";
-      console.log(
-        "[FlowShelf] Extracted page content length:",
-        content.length
-      );
+      // 并行：提取正文 + AI 分类（分类很快，正文提取稍慢）
+      const contentPromise =
+        tab.id != null ? extractPageContent(tab.id) : Promise.resolve("");
+      const classifyPromise = classifyApi.classify(tab.url, tab.title);
+
+      const [content, classifyResult] = await Promise.all([
+        contentPromise,
+        classifyPromise,
+      ]);
       setPageContent(content);
 
-      // Step 2: AI 智能分流（附带正文，跳过后端抓取）
-      setLoadingMsg("AI 正在识别页面类型...");
-      const classifyResult = await classifyApi.classify(
-        tab.url,
-        tab.title,
-        content
-      );
-      console.log("[FlowShelf] Classify result:", classifyResult);
       const suggestedType = classifyToCollectType(classifyResult.type);
       setAiSuggestedType(suggestedType);
       setCollectType(suggestedType);
 
-      // Step 3: 生成预览
-      setLoadingMsg("AI 正在生成预览内容...");
-      await generatePreview(suggestedType, tab.url, content);
-
-      console.log("[FlowShelf] Preview generated, switching to preview phase");
-      setPhase("preview");
+      setPhase("ready");
     } catch (err) {
-      console.error("[FlowShelf] initFlow error:", err);
-      // fetch 网络错误 → 引导用户检查后端地址
+      console.error("[FlowShelf] initQuickCollect error:", err);
       if (err instanceof TypeError) {
         setError("无法连接到后端服务，请检查 API 地址设置。");
       } else {
@@ -134,112 +113,142 @@ export default function Popup() {
     }
   }
 
-  async function generatePreview(
-    type: CollectType,
-    url: string,
-    content: string
-  ) {
-    if (type === "card") {
-      if (cardData) {
-        loadCardEdits(cardData);
-        return;
-      }
-      const preview = await cardsApi.generate(url, content);
-      setCardData(preview);
-      loadCardEdits(preview);
-    } else {
-      if (toolData) {
-        loadToolEdits(toolData);
-        return;
-      }
-      const preview = await toolsApi.generate(url, content);
-      setToolData(preview);
-      loadToolEdits(preview);
-    }
-  }
+  // ============ 快速保存（方案 C：先保存后生成） ============
 
-  function loadCardEdits(preview: CardPreview) {
-    setEditTitle(preview.title);
-    setEditSummary(preview.summary);
-    setEditKeyPoints(preview.key_points.join("\n"));
-    setEditDescription("");
-  }
-
-  function loadToolEdits(preview: ToolPreview) {
-    setEditTitle(preview.title);
-    setEditDescription(preview.description);
-    setEditSummary("");
-    setEditKeyPoints("");
-  }
-
-  // ============ 类型切换（用户修正 AI 分流结果）============
-  async function handleTypeSwitch(newType: CollectType) {
-    if (newType === collectType || !tabInfo) return;
-    setCollectType(newType);
-
-    const hasCached = newType === "card" ? !!cardData : !!toolData;
-    if (!hasCached) {
-      setPhase("switching");
-    }
-    try {
-      await generatePreview(newType, tabInfo.url, pageContent);
-      setPhase("preview");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "生成失败");
-      setPhase("error");
-    }
-  }
-
-  // ============ 保存 ============
-  async function handleSave() {
+  async function handleQuickSave() {
     if (!tabInfo) return;
     setPhase("saving");
+    setError("");
     try {
-      if (collectType === "card" && cardData) {
-        const keyPoints = editKeyPoints
-          .split("\n")
-          .map((s) => s.trim())
-          .filter(Boolean);
-        await cardsApi.create(
-          tabInfo.url,
-          {
-            title: editTitle.trim() || cardData.title,
-            summary: editSummary.trim() || cardData.summary,
-            key_points: keyPoints,
-            tags: cardData.tags,
-          },
-          pageContent
-        );
-        setSavedType("card");
-      } else if (collectType === "tool" && toolData) {
-        await toolsApi.create(
-          tabInfo.url,
-          editTitle.trim() || toolData.title,
-          editDescription.trim() || toolData.description,
-          toolData.tags,
-          pageContent
-        );
-        setSavedType("tool");
-      }
+      const itemType = collectType === "card" ? "article" : "tool";
+      const item = await learningApi.create(
+        tabInfo.url,
+        tabInfo.title || tabInfo.url,
+        itemType as "article" | "tool",
+        pageContent
+      );
+      setSavedItem(item);
       setPhase("success");
     } catch (err) {
+      console.error("[FlowShelf] Quick save error:", err);
       setError(err instanceof Error ? err.message : "保存失败");
       setPhase("error");
     }
   }
 
-  // ============ 跳转 Web 应用 ============
+  // ============ Tab 管理 ============
+
+  async function fetchAndGroupTabs() {
+    setTabLoading(true);
+    setTabError("");
+    try {
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      setAllTabs(tabs);
+
+      const tabInputs = tabs.filter(
+        (t) =>
+          t.url && (t.url.startsWith("http") || t.url.startsWith("https"))
+      ).map((t) => ({
+        url: t.url!,
+        title: t.title || "",
+        favIconUrl: t.favIconUrl,
+      }));
+
+      if (tabInputs.length === 0) {
+        setTabGroups([]);
+        setGroupCount(0);
+        return;
+      }
+
+      if (tabInputs.length <= 1) {
+        setTabGroups([
+          { name: "全部标签", tab_indices: tabInputs.map((_, i) => i) },
+        ]);
+        setGroupCount(1);
+        return;
+      }
+
+      const result = await tabsApi.group(tabInputs);
+      setTabGroups(result.groups);
+      setGroupCount(result.group_count);
+      setExpandedGroups(new Set(result.groups.map((_, i: number) => i)));
+    } catch (err) {
+      console.error("[FlowShelf] Tab grouping error:", err);
+      setTabError(err instanceof Error ? err.message : "Tab 归组失败");
+    } finally {
+      setTabLoading(false);
+    }
+  }
+
+  function toggleGroupExpand(groupIndex: number) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      next.has(groupIndex) ? next.delete(groupIndex) : next.add(groupIndex);
+      return next;
+    });
+  }
+
+  async function activateTab(tabIndex: number) {
+    const tabs = allTabs.filter(
+      (t) => t.url && (t.url.startsWith("http") || t.url.startsWith("https"))
+    );
+    const tab = tabs[tabIndex];
+    if (tab?.id) {
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
+  }
+
+  async function closeTab(tabIndex: number, e?: React.MouseEvent) {
+    if (e) e.stopPropagation();
+    const tabs = allTabs.filter(
+      (t) => t.url && (t.url.startsWith("http") || t.url.startsWith("https"))
+    );
+    const tab = tabs[tabIndex];
+    if (tab?.id) {
+      await chrome.tabs.remove(tab.id);
+      fetchAndGroupTabs();
+    }
+  }
+
+  async function closeGroup(group: import("@/lib/types").TabGroup) {
+    const tabs = allTabs.filter(
+      (t) => t.url && (t.url.startsWith("http") || t.url.startsWith("https"))
+    );
+    const ids = group.tab_indices
+      .map((i) => tabs[i]?.id)
+      .filter((id): id is number => id != null);
+    if (ids.length > 0) {
+      await chrome.tabs.remove(ids);
+      fetchAndGroupTabs();
+    }
+  }
+
+  // ============ 跳转 ============
+
   async function openWebPage(path: string) {
     try {
       const base = await getWebBase();
-      const url = base.replace(/\/$/, "") + path;
-      await chrome.tabs.create({ url });
+      const webBase = base.replace(/\/$/, "");
+      const targetUrl = webBase + path;
+
+      // 查找已打开的 Web 应用标签页，有则复用导航，无则新建
+      const tabs = await chrome.tabs.query({ url: `${webBase}/*` });
+      if (tabs.length > 0 && tabs[0].id) {
+        await chrome.tabs.update(tabs[0].id, { url: targetUrl, active: true });
+        if (tabs[0].windowId != null) {
+          await chrome.windows.update(tabs[0].windowId, { focused: true });
+        }
+      } else {
+        await chrome.tabs.create({ url: targetUrl });
+      }
     } catch (err) {
       console.error("[FlowShelf] openWebPage failed:", err);
     }
   }
 
-  // ============ 设置面板 ============
+  // ============ 设置 ============
+
   async function openSettings() {
     const currentBase = await getApiBase();
     const currentWebBase = await getWebBase();
@@ -254,29 +263,20 @@ export default function Popup() {
     const webUrl = settingsWebUrl.trim().replace(/\/$/, "");
     await setApiBase(apiUrl);
     await setWebBase(webUrl);
-    setSettingsMsg("✅ 设置已保存，正在重新连接...");
-    setCardData(null);
-    setToolData(null);
-    setPageContent("");
+    setSettingsMsg("✅ 设置已保存");
     setTimeout(() => {
       setPhase("loading");
-      setLoadingMsg("正在获取页面信息...");
-      initFlow();
+      initQuickCollect();
     }, 500);
   }
 
-  // ============ 重试 ============
   function handleRetry() {
     setError("");
-    setCardData(null);
-    setToolData(null);
-    setPageContent("");
     setPhase("loading");
-    setLoadingMsg("正在获取页面信息...");
-    initFlow();
+    initQuickCollect();
   }
 
-  // ============ 渲染各阶段内容 ============
+  // ============ 渲染 ============
 
   function renderHeader() {
     return (
@@ -303,6 +303,13 @@ export default function Popup() {
                 🛠️
               </button>
               <button
+                className="fs-nav-btn"
+                onClick={() => openWebPage("/tabs")}
+                title="打开 Tab 管理台"
+              >
+                🗂️
+              </button>
+              <button
                 className="fs-icon-btn"
                 onClick={openSettings}
                 title="设置"
@@ -325,169 +332,218 @@ export default function Popup() {
     );
   }
 
-  function renderLoading(msg: string) {
+  function renderViewTabs() {
     return (
-      <div className="fs-loading">
-        <div className="fs-spinner" />
-        <p className="fs-loading-msg">{msg}</p>
-      </div>
-    );
-  }
-
-  function renderTypeToggle() {
-    return (
-      <div className="fs-type-toggle">
+      <div className="fs-view-tabs">
         <button
-          className={`fs-type-btn ${collectType === "card" ? "active" : ""}`}
-          onClick={() => handleTypeSwitch("card")}
-          disabled={phase === "switching" || phase === "saving"}
+          className={`fs-view-tab ${viewMode === "collect" ? "active" : ""}`}
+          onClick={() => setViewMode("collect")}
         >
-          📄 知识卡片
+          收藏
         </button>
         <button
-          className={`fs-type-btn ${collectType === "tool" ? "active" : ""}`}
-          onClick={() => handleTypeSwitch("tool")}
-          disabled={phase === "switching" || phase === "saving"}
+          className={`fs-view-tab ${viewMode === "tabs" ? "active" : ""}`}
+          onClick={() => setViewMode("tabs")}
         >
-          🔧 工具箱
+          标签页
         </button>
       </div>
     );
   }
 
-  function renderTags(tags: string[]) {
+  function renderQuickSaveForm() {
     return (
-      <div className="fs-field">
-        <label className="fs-field-label">🏷️ 标签（AI 生成）</label>
-        <div className="fs-tags">
-          {tags.length > 0 ? (
-            tags.map((tag, i) => (
-              <span key={i} className="fs-tag">
-                {tag}
-              </span>
-            ))
-          ) : (
-            <span className="fs-tag-empty">暂无标签</span>
-          )}
-        </div>
-      </div>
-    );
-  }
+      <div>
+        {renderViewTabs()}
 
-  function renderCardPreview() {
-    return (
-      <div className="fs-preview">
-        {aiSuggestedType !== collectType && (
-          <div className="fs-ai-hint">
-            💡 AI 建议保存为
-            {aiSuggestedType === "card" ? "知识卡片" : "工具"}，已按你的选择调整
-          </div>
-        )}
         {aiSuggestedType === collectType && (
           <div className="fs-ai-hint fs-ai-hint-ok">
             ✨ AI 已识别为{collectType === "card" ? "文章" : "工具"}
           </div>
         )}
-
-        <div className="fs-field">
-          <label className="fs-field-label">📌 标题</label>
-          <input
-            type="text"
-            className="fs-input"
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            disabled={phase === "saving"}
-          />
-        </div>
-
-        <div className="fs-field">
-          <label className="fs-field-label">📝 摘要</label>
-          <textarea
-            className="fs-textarea"
-            value={editSummary}
-            onChange={(e) => setEditSummary(e.target.value)}
-            rows={4}
-            disabled={phase === "saving"}
-          />
-        </div>
-
-        <div className="fs-field">
-          <label className="fs-field-label">💡 关键观点（每行一条）</label>
-          <textarea
-            className="fs-textarea"
-            value={editKeyPoints}
-            onChange={(e) => setEditKeyPoints(e.target.value)}
-            rows={4}
-            placeholder="每行一条观点"
-            disabled={phase === "saving"}
-          />
-        </div>
-
-        {cardData && renderTags(cardData.tags)}
-      </div>
-    );
-  }
-
-  function renderToolPreview() {
-    return (
-      <div className="fs-preview">
         {aiSuggestedType !== collectType && (
           <div className="fs-ai-hint">
             💡 AI 建议保存为
-            {aiSuggestedType === "card" ? "知识卡片" : "工具"}，已按你的选择调整
-          </div>
-        )}
-        {aiSuggestedType === collectType && (
-          <div className="fs-ai-hint fs-ai-hint-ok">
-            ✨ AI 已识别为工具
+            {aiSuggestedType === "card" ? "知识卡片" : "工具"}，
+            已按你的选择调整
           </div>
         )}
 
-        <div className="fs-field">
-          <label className="fs-field-label">🔧 工具名称</label>
-          <input
-            type="text"
-            className="fs-input"
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            disabled={phase === "saving"}
-          />
+        <div className="fs-url-preview">
+          <div className="fs-url-title">
+            {tabInfo?.title || "无标题"}
+          </div>
+          <div className="fs-url-domain">
+            {tabInfo
+              ? new URL(tabInfo.url).hostname
+              : ""}
+          </div>
         </div>
 
-        <div className="fs-field">
-          <label className="fs-field-label">📝 工具描述</label>
-          <textarea
-            className="fs-textarea"
-            value={editDescription}
-            onChange={(e) => setEditDescription(e.target.value)}
-            rows={3}
-            placeholder="工具用途说明"
-            disabled={phase === "saving"}
-          />
+        <div className="fs-type-toggle">
+          <button
+            className={`fs-type-btn ${collectType === "card" ? "active" : ""}`}
+            onClick={() => setCollectType("card")}
+          >
+            📄 知识卡片
+          </button>
+          <button
+            className={`fs-type-btn ${collectType === "tool" ? "active" : ""}`}
+            onClick={() => setCollectType("tool")}
+          >
+            🔧 工具箱
+          </button>
         </div>
 
-        {toolData && renderTags(toolData.tags)}
+        <div className="fs-footer">
+          <button
+            className="fs-btn fs-btn-primary"
+            onClick={handleQuickSave}
+            disabled={phase === "saving"}
+            style={{ flex: 1 }}
+          >
+            {collectType === "card" ? "📥 加入待学习" : "🔧 存入工具箱"}
+          </button>
+        </div>
+
+        <div className="fs-hint">
+          💡 快速收藏，AI 会在后台为你生成摘要和标签。
+          可在 Web 应用中查看和编辑。
+        </div>
       </div>
     );
   }
 
-  function renderFooter() {
+  function renderTabView() {
+    const totalTabs = allTabs.filter(
+      (t) => t.url && (t.url.startsWith("http") || t.url.startsWith("https"))
+    ).length;
+
     return (
-      <div className="fs-footer">
-        <button
-          className="fs-btn fs-btn-outline"
-          onClick={() => window.close()}
-          disabled={phase === "saving"}
-        >
-          取消
-        </button>
-        <button
-          className="fs-btn fs-btn-primary"
-          onClick={handleSave}
-          disabled={phase === "saving" || phase === "switching"}
-        >
-          {collectType === "card" ? "保存为卡片" : "保存到工具箱"}
-        </button>
+      <div>
+        {renderViewTabs()}
+
+        <div className="fs-tab-stats">
+          <span>
+            📊 当前 <strong>{totalTabs}</strong> 个标签 · AI 已分为{" "}
+            <strong>{groupCount}</strong> 组
+          </span>
+          <button
+            className="fs-tab-refresh"
+            onClick={fetchAndGroupTabs}
+            title="重新归组"
+          >
+            🔄
+          </button>
+        </div>
+
+        {tabLoading && (
+          <div className="fs-loading">
+            <div className="fs-spinner" />
+            <p className="fs-loading-msg">AI 正在归组标签页...</p>
+          </div>
+        )}
+
+        {!tabLoading && tabError && (
+          <div className="fs-error">
+            <p className="fs-error-msg">{tabError}</p>
+            <button
+              className="fs-btn fs-btn-primary"
+              onClick={fetchAndGroupTabs}
+              style={{ marginTop: 8, minWidth: 80 }}
+            >
+              重试
+            </button>
+          </div>
+        )}
+
+        {!tabLoading && !tabError && tabGroups.length === 0 && (
+          <div className="fs-tab-empty">
+            <div className="fs-tab-empty-icon">📭</div>
+            <p className="fs-tab-empty-msg">暂无可归组的标签页</p>
+          </div>
+        )}
+
+        {!tabLoading && !tabError && tabGroups.length > 0 && (
+          <div className="fs-tab-groups">
+            {tabGroups.map((group, gi) => {
+              const expanded = expandedGroups.has(gi);
+              const tabs = allTabs.filter(
+                (t) =>
+                  t.url &&
+                  (t.url.startsWith("http") || t.url.startsWith("https"))
+              );
+              return (
+                <div key={gi} className="fs-tab-group">
+                  <div
+                    className="fs-tab-group-header"
+                    onClick={() => toggleGroupExpand(gi)}
+                  >
+                    <div className="fs-tab-group-name">
+                      <span
+                        className={`fs-tab-group-chevron ${expanded ? "open" : ""}`}
+                      >
+                        ▶
+                      </span>
+                      <span>{group.name}</span>
+                      <span className="fs-tab-group-count">
+                        {group.tab_indices.length}
+                      </span>
+                    </div>
+                  </div>
+                  {expanded && (
+                    <>
+                      <div className="fs-tab-group-body">
+                        {group.tab_indices.map((ti) => {
+                          const tab = tabs[ti];
+                          if (!tab) return null;
+                          return (
+                            <div
+                              key={ti}
+                              className="fs-tab-group-item"
+                              onClick={() => activateTab(ti)}
+                              title={tab.title || tab.url}
+                            >
+                              <span className="fs-tab-group-item-icon">🌐</span>
+                              <span className="fs-tab-group-item-title">
+                                {tab.title || tab.url}
+                              </span>
+                              <button
+                                className="fs-tab-group-item-close"
+                                onClick={(e) => closeTab(ti, e)}
+                                title="关闭此标签"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="fs-tab-group-actions">
+                        <button
+                          className="fs-tab-group-btn"
+                          onClick={() => closeGroup(group)}
+                        >
+                          🗑 整组关闭
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{ padding: "10px 12px", borderTop: "1px solid #f3f4f6" }}>
+          <button
+            className="fs-btn fs-btn-outline"
+            onClick={() => openWebPage("/tabs")}
+            style={{ width: "100%" }}
+          >
+            🗂️ 在 Web 应用中管理所有窗口标签
+          </button>
+        </div>
       </div>
     );
   }
@@ -497,142 +553,150 @@ export default function Popup() {
     <div className="fs-popup">
       {renderHeader()}
       <div className="fs-content">
-        {(phase === "loading" || phase === "switching") &&
-          renderLoading(
-            phase === "switching"
-              ? "AI 正在生成预览内容..."
-              : loadingMsg
-          )}
+        {viewMode === "tabs" && renderTabView()}
 
-        {phase === "preview" && (
+        {viewMode === "collect" && (
           <>
-            {renderTypeToggle()}
-            {collectType === "card" ? renderCardPreview() : renderToolPreview()}
-            {renderFooter()}
-          </>
-        )}
-
-        {phase === "saving" && (
-          <>
-            {renderTypeToggle()}
-            <div className="fs-loading">
-              <div className="fs-spinner" />
-              <p className="fs-loading-msg">正在保存...</p>
-            </div>
-          </>
-        )}
-
-        {phase === "success" && (
-          <div className="fs-success">
-            <div className="fs-success-icon">✅</div>
-            <p className="fs-success-msg">
-              已保存为{savedType === "card" ? "知识卡片" : "工具"}！
-            </p>
-            <p className="fs-success-sub">
-              {tabInfo?.title && tabInfo.title.length > 40
-                ? tabInfo.title.slice(0, 40) + "..."
-                : tabInfo?.title}
-            </p>
-            <div className="fs-success-actions">
-              <button
-                className="fs-btn fs-btn-outline"
-                onClick={() =>
-                  openWebPage(savedType === "card" ? "/cards" : "/toolbox")
-                }
-              >
-                查看{savedType === "card" ? "卡片库" : "工具箱"}
-              </button>
-              <button
-                className="fs-btn fs-btn-primary"
-                onClick={() => window.close()}
-              >
-                完成
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === "error" && (
-          <div className="fs-error">
-            <div className="fs-error-icon">⚠️</div>
-            <p className="fs-error-msg">{error}</p>
-            <div className="fs-error-actions">
-              <button className="fs-btn fs-btn-outline" onClick={openSettings}>
-                设置
-              </button>
-              <button
-                className="fs-btn fs-btn-primary"
-                onClick={handleRetry}
-              >
-                重试
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === "invalid-page" && (
-          <div className="fs-error">
-            <div className="fs-error-icon">🚫</div>
-            <p className="fs-error-msg">当前页面无法收藏</p>
-            <p className="fs-error-sub">
-              FlowShelf 仅支持 http/https 页面，不支持浏览器内部页面。
-            </p>
-          </div>
-        )}
-
-        {phase === "settings" && (
-          <div className="fs-settings">
-            <h3 className="fs-settings-title">设置</h3>
-            <p className="fs-settings-desc">
-              配置 FlowShelf 后端服务与 Web 应用地址（含协议和端口）
-            </p>
-
-            <div className="fs-settings-field">
-              <label className="fs-settings-label">后端 API 地址</label>
-              <input
-                type="text"
-                className="fs-input"
-                value={settingsUrl}
-                onChange={(e) => setSettingsUrl(e.target.value)}
-                placeholder="http://localhost:8000"
-              />
-            </div>
-
-            <div className="fs-settings-field">
-              <label className="fs-settings-label">Web 应用地址（卡片库 / 工具箱）</label>
-              <input
-                type="text"
-                className="fs-input"
-                value={settingsWebUrl}
-                onChange={(e) => setSettingsWebUrl(e.target.value)}
-                placeholder="http://localhost:3000"
-              />
-            </div>
-
-            <button
-              className="fs-btn fs-btn-primary"
-              onClick={handleSaveSettings}
-              style={{ marginTop: 4, width: "100%" }}
-            >
-              保存并重连
-            </button>
-            {settingsMsg && (
-              <p className="fs-settings-msg">{settingsMsg}</p>
+            {phase === "loading" && (
+              <div className="fs-loading">
+                <div className="fs-spinner" />
+                <p className="fs-loading-msg">AI 正在识别页面类型...</p>
+              </div>
             )}
-          </div>
+
+            {phase === "ready" && renderQuickSaveForm()}
+
+            {phase === "saving" && (
+              <div className="fs-loading">
+                <div className="fs-spinner" />
+                <p className="fs-loading-msg">正在保存...</p>
+              </div>
+            )}
+
+            {phase === "success" && savedItem && (
+              <div className="fs-success">
+                <div className="fs-success-icon">✅</div>
+                <p className="fs-success-msg">
+                  已加入
+                  {savedItem.item_type === "card"
+                    ? "待学习队列"
+                    : "工具箱"}
+                  ！
+                </p>
+                <p className="fs-success-sub">
+                  {savedItem.title.length > 40
+                    ? savedItem.title.slice(0, 40) + "..."
+                    : savedItem.title}
+                </p>
+                <p className="fs-success-enrich">
+                  {savedItem.is_ready
+                    ? "✨ AI 内容已生成"
+                    : "⏳ AI 正在后台生成摘要和标签..."}
+                </p>
+                <div className="fs-success-actions">
+                  <button
+                    className="fs-btn fs-btn-outline"
+                    onClick={() =>
+                      openWebPage(
+                        savedItem.item_type === "card"
+                          ? "/cards"
+                          : "/toolbox"
+                      )
+                    }
+                  >
+                    查看
+                    {savedItem.item_type === "card"
+                      ? "卡片库"
+                      : "工具箱"}
+                  </button>
+                  <button
+                    className="fs-btn fs-btn-primary"
+                    onClick={() => window.close()}
+                  >
+                    完成
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {phase === "error" && (
+              <div className="fs-error">
+                <div className="fs-error-icon">⚠️</div>
+                <p className="fs-error-msg">{error}</p>
+                <div className="fs-error-actions">
+                  <button
+                    className="fs-btn fs-btn-outline"
+                    onClick={openSettings}
+                  >
+                    设置
+                  </button>
+                  <button
+                    className="fs-btn fs-btn-primary"
+                    onClick={handleRetry}
+                  >
+                    重试
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {phase === "invalid-page" && (
+              <div className="fs-error">
+                <div className="fs-error-icon">🚫</div>
+                <p className="fs-error-msg">当前页面无法收藏</p>
+                <p className="fs-error-sub">
+                  FlowShelf 仅支持 http/https 页面。
+                </p>
+              </div>
+            )}
+
+            {phase === "settings" && (
+              <div className="fs-settings">
+                <h3 className="fs-settings-title">设置</h3>
+                <p className="fs-settings-desc">
+                  配置 FlowShelf 后端服务与 Web 应用地址
+                </p>
+                <div className="fs-settings-field">
+                  <label className="fs-settings-label">后端 API 地址</label>
+                  <input
+                    type="text"
+                    className="fs-input"
+                    value={settingsUrl}
+                    onChange={(e) => setSettingsUrl(e.target.value)}
+                    placeholder="http://localhost:8000"
+                  />
+                </div>
+                <div className="fs-settings-field">
+                  <label className="fs-settings-label">Web 应用地址</label>
+                  <input
+                    type="text"
+                    className="fs-input"
+                    value={settingsWebUrl}
+                    onChange={(e) => setSettingsWebUrl(e.target.value)}
+                    placeholder="http://localhost:3000"
+                  />
+                </div>
+                <button
+                  className="fs-btn fs-btn-primary"
+                  onClick={handleSaveSettings}
+                  style={{ marginTop: 4, width: "100%" }}
+                >
+                  保存并重连
+                </button>
+                {settingsMsg && (
+                  <p className="fs-settings-msg">{settingsMsg}</p>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
 
-// ============ 挂载 React 根节点 ============
-console.log("[FlowShelf] Mounting React root...");
 const rootEl = document.getElementById("root");
 if (rootEl) {
   const root = ReactDOM.createRoot(rootEl);
   root.render(<Popup />);
-  console.log("[FlowShelf] React root mounted successfully");
-} else {
-  console.error("[FlowShelf] Root element #root not found!");
 }

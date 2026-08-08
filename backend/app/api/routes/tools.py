@@ -58,12 +58,9 @@ async def list_tools(
     limit: int = Query(20, ge=1, le=100),
     tag: Optional[str] = None,
     sort_by: str = Query("created_at", description="排序方式"),
-    q: Optional[str] = Query(
-        None, description="关键词搜索（提供时忽略 sort_by，按相关度排序）"
-    ),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取工具列表（支持关键词搜索 + 标签组合筛选）"""
+    """获取工具列表（标签筛选 + 排序；关键词搜索请走 /api/search）"""
     settings = get_settings()
     ai_provider = get_ai_provider(
         demo_mode=settings.DEMO_MODE,
@@ -81,7 +78,6 @@ async def list_tools(
         limit=limit,
         tag=tag,
         sort_by=sort_by,
-        q=q,
     )
 
     return tools

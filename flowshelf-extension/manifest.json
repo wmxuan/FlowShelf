@@ -7,8 +7,18 @@
     "default_title": "FlowShelf",
     "default_popup": "src/popup/index.html"
   },
-  "permissions": ["storage", "tabs", "activeTab", "contextMenus", "scripting"],
+  "chrome_url_overrides": {
+    "newtab": "src/newtab/index.html"
+  },
+  "permissions": ["storage", "tabs", "activeTab", "contextMenus", "scripting", "bookmarks", "notifications"],
   "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*", "https://*.flowshelf.app/*"],
+      "js": ["src/content/bridge.ts"],
+      "run_at": "document_start"
+    }
+  ],
   "background": {
     "service_worker": "src/background/index.ts",
     "type": "module"

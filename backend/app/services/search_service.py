@@ -65,8 +65,12 @@ class SearchService:
             cards = await self._get_all_cards()
             for card in cards:
                 score = self._compute_hybrid_score(
-                    query, query_embedding, card.embedding,
-                    card.title, card.ai_tags or [], card.ai_summary,
+                    query,
+                    query_embedding,
+                    card.embedding,
+                    card.title,
+                    card.ai_tags or [],
+                    card.ai_summary,
                 )
                 if score > 0:
                     results.append(
@@ -78,6 +82,8 @@ class SearchService:
                             summary=card.ai_summary,
                             tags=card.ai_tags or [],
                             score=score,
+                            key_points=card.key_points or [],
+                            created_at=card.created_at,
                         )
                     )
 
@@ -86,8 +92,12 @@ class SearchService:
             tools = await self._get_all_tools()
             for tool in tools:
                 score = self._compute_hybrid_score(
-                    query, query_embedding, tool.embedding,
-                    tool.title, tool.ai_tags or [], tool.description or "",
+                    query,
+                    query_embedding,
+                    tool.embedding,
+                    tool.title,
+                    tool.ai_tags or [],
+                    tool.description or "",
                 )
                 if score > 0:
                     results.append(
@@ -99,6 +109,8 @@ class SearchService:
                             summary=tool.description,
                             tags=tool.ai_tags or [],
                             score=score,
+                            visit_count=tool.visit_count,
+                            last_visited_at=tool.last_visited_at,
                         )
                     )
 

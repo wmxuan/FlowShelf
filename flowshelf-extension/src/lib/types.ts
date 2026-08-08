@@ -65,3 +65,45 @@ export interface TabInfo {
   title: string;
   favIconUrl?: string;
 }
+
+/** Tab 归组响应 */
+export interface TabGroup {
+  name: string;
+  tab_indices: number[];
+}
+
+export interface TabGroupResponse {
+  groups: TabGroup[];
+  total: number;
+  group_count: number;
+}
+
+/** 单标签分组：已有分组上下文 */
+export interface GroupContext {
+  name: string;
+  count: number;
+  sample_tabs: { url: string; title: string }[];
+}
+
+/** 单标签分组响应 */
+export interface TabAssignResponse {
+  action: "assign" | "create";
+  group_name: string;
+}
+
+/** 待学习项（快速收藏后进入的轻量记录） */
+export interface LearningItem {
+  id: number;
+  source_url: string;
+  title: string;
+  item_type: string;
+  ai_summary: string | null;
+  key_points: string[];
+  ai_tags: string[];
+  tool_description: string | null;
+  is_ready: boolean;
+  is_converted: boolean;
+  converted_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
