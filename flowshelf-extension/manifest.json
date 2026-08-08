@@ -23,6 +23,12 @@
   },
   "permissions": ["storage", "tabs", "tabGroups", "activeTab", "contextMenus", "scripting", "bookmarks", "notifications", "nativeMessaging"],
   "host_permissions": ["<all_urls>"],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*", "src/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "content_scripts": [
     {
       "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*", "http://*:3000/*", "http://localhost:8972/*", "http://127.0.0.1:8972/*", "https://*.flowshelf.app/*"],
