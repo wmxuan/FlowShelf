@@ -68,3 +68,29 @@ export interface ErrorResponse {
   detail: string;
   error_code?: string;
 }
+
+export interface LearningItem {
+  id: number;
+  source_url: string;
+  title: string;
+  item_type: 'unspecified' | 'article' | 'tool';
+  content?: string | null;
+  ai_summary: string | null;
+  key_points: string[] | null;
+  ai_tags: string[] | null;
+  tool_description: string | null;
+  is_ready: boolean;
+  is_converted: boolean;
+  converted_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LearningConvertResult {
+  id: number;
+  is_converted: boolean;
+  converted_id: number | null;
+  converted_type: 'article' | 'tool';
+  ai_summary?: string;
+  tool_description?: string;
+}

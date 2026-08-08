@@ -12,24 +12,8 @@ import {
   Shuffle,
 } from 'lucide-react';
 import DeleteConfirmButton from '@/components/DeleteConfirmButton';
-
-interface LearningItem {
-  id: number;
-  source_url: string;
-  title: string;
-  item_type: string;
-  ai_summary: string | null;
-  key_points: string[] | null;
-  ai_tags: string[] | null;
-  tool_description: string | null;
-  is_ready: boolean;
-  is_converted: boolean;
-  converted_id: number | null;
-  created_at: string;
-  updated_at: string;
-}
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+import { learningApi } from '@/services/api';
+import type { LearningItem } from '@/types';
 
 type TabKey = 'unspecified' | 'article' | 'tool';
 
@@ -44,9 +28,7 @@ export default function LearningPage() {
   const loadItems = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/learning`);
-      if (!res.ok) throw new Error(`加载失败: ${res.status}`);
-      const data = await res.json();
+      const data = await learningApi.list();
       const safeData = (Array.isArray(data) ? data : []).map((item: LearningItem) => ({
         ...item,
         key_points: Array.isArray(item.key_points) ? item.key_points : [],
@@ -94,15 +76,7 @@ export default function LearningPage() {
       if (item.ai_tags && item.ai_tags.length > 0) body.ai_tags = item.ai_tags;
       if (item.tool_description) body.tool_description = item.tool_description;
 
-      const res = await fetch(`${API_BASE}/api/learning/${id}/convert`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
-        throw new Error(errData.detail || `转换失败: ${res.status}`);
-      }
+      await learningApi.convert(id, body as Parameters<typeof learningApi.convert>[1]);
       loadItems();
     } catch (err) {
       setError(err instanceof Error ? err.message : '转换失败');
@@ -117,14 +91,7 @@ export default function LearningPage() {
 
   const handleEnrich = async (id: number) => {
     try {
-      const res = await fetch(`${API_BASE}/api/learning/${id}/enrich`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
-        throw new Error(errData.detail || `重新生成失败: ${res.status}`);
-      }
+      await learningApi.enrich(id);
       loadItems();
     } catch (err) {
       setError(err instanceof Error ? err.message : '重新生成失败');
@@ -133,10 +100,7 @@ export default function LearningPage() {
 
   const handleDelete = async (id: number) => {
     try {
-      const res = await fetch(`${API_BASE}/api/learning/${id}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) throw new Error(`删除失败: ${res.status}`);
+      await learningApi.delete(id);
       loadItems();
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除失败');

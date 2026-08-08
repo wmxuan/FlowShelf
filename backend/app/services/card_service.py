@@ -3,24 +3,29 @@
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert, update, delete, text
+from sqlalchemy import select, text
 from typing import List, Optional
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from app.db.models.models import Card
-from app.db.schemas.schemas import CardCreate, CardUpdate
+from app.db.schemas.schemas import CardUpdate
 from app.providers.base import BaseAIProvider
+from app.services.base_crud_service import BaseCRUDService
 from app.services.tag_service import get_candidate_tags, normalize_tags
-from app.tools.content_extractor import content_extractor, ExtractionResult
+from app.tools.content_extractor import content_extractor
 
 
-class CardService:
+class CardService(BaseCRUDService[Card, CardUpdate]):
     """卡片服务"""
 
+    model = Card
+    table_name = "cards"
+    has_updated_at = True
+
     def __init__(self, db: AsyncSession, ai_provider: BaseAIProvider):
-        self.db = db
-        self.ai_provider = ai_provider
+        # 同时保留原字段名 db / ai_provider，与本服务其他方法保持一致
+        super().__init__(db, ai_provider)
 
     async def create_card(
         self,
@@ -226,37 +231,15 @@ class CardService:
         return [{"name": row[0], "count": row[1]} for row in rows]
 
     async def get_card(self, card_id: int) -> Optional[Card]:
-        """获取单个卡片"""
-        query = select(Card).where(Card.id == card_id)
-        result = await self.db.execute(query)
-        return result.scalar_one_or_none()
+        """获取单个卡片（保留旧名，路由层零修改）"""
+        return await self.get_by_id(card_id)
 
     async def update_card(
         self, card_id: int, update_data: CardUpdate
     ) -> Optional[Card]:
-        """更新卡片"""
-        card = await self.get_card(card_id)
-        if not card:
-            return None
-
-        update_dict = update_data.model_dump(exclude_unset=True)
-        for key, value in update_dict.items():
-            if hasattr(card, key):
-                setattr(card, key, value)
-
-        card.updated_at = datetime.now()
-        await self.db.commit()
-        await self.db.refresh(card)
-
-        return card
+        """更新卡片（保留旧名，路由层零修改）"""
+        return await self.update(card_id, update_data)
 
     async def delete_card(self, card_id: int) -> bool:
-        """删除卡片"""
-        card = await self.get_card(card_id)
-        if not card:
-            return False
-
-        await self.db.delete(card)
-        await self.db.commit()
-
-        return True
+        """删除卡片（保留旧名，路由层零修改）"""
+        return await self.delete(card_id)

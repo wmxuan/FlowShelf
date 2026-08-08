@@ -9,20 +9,25 @@ from sqlalchemy import select, text
 from typing import List, Optional
 
 from app.db.models.models import Tool
-from app.db.schemas.schemas import ToolCreate, ToolUpdate
+from app.db.schemas.schemas import ToolUpdate
 from app.providers.base import BaseAIProvider
+from app.services.base_crud_service import BaseCRUDService
 from app.services.tag_service import get_candidate_tags, normalize_tags
 from app.tools.content_extractor import content_extractor
 
 logger = logging.getLogger(__name__)
 
 
-class ToolService:
+class ToolService(BaseCRUDService[Tool, ToolUpdate]):
     """工具箱服务"""
 
+    model = Tool
+    table_name = "tools"
+    # 原 update_tool 不手动刷新 updated_at，保持一致
+    has_updated_at = False
+
     def __init__(self, db: AsyncSession, ai_provider: BaseAIProvider):
-        self.db = db
-        self.ai_provider = ai_provider
+        super().__init__(db, ai_provider)
 
     async def create_tool(
         self,
@@ -206,39 +211,18 @@ class ToolService:
         return [{"name": row[0], "count": row[1]} for row in rows]
 
     async def get_tool(self, tool_id: int) -> Optional[Tool]:
-        """获取单个工具"""
-        query = select(Tool).where(Tool.id == tool_id)
-        result = await self.db.execute(query)
-        return result.scalar_one_or_none()
+        """获取单个工具（保留旧名，路由层零修改）"""
+        return await self.get_by_id(tool_id)
 
     async def update_tool(
         self, tool_id: int, update_data: ToolUpdate
     ) -> Optional[Tool]:
-        """更新工具"""
-        tool = await self.get_tool(tool_id)
-        if not tool:
-            return None
-
-        update_dict = update_data.model_dump(exclude_unset=True)
-        for key, value in update_dict.items():
-            if hasattr(tool, key):
-                setattr(tool, key, value)
-
-        await self.db.commit()
-        await self.db.refresh(tool)
-
-        return tool
+        """更新工具（保留旧名，路由层零修改）"""
+        return await self.update(tool_id, update_data)
 
     async def delete_tool(self, tool_id: int) -> bool:
-        """删除工具"""
-        tool = await self.get_tool(tool_id)
-        if not tool:
-            return False
-
-        await self.db.delete(tool)
-        await self.db.commit()
-
-        return True
+        """删除工具（保留旧名，路由层零修改）"""
+        return await self.delete(tool_id)
 
     async def increment_visit(self, tool_id: int) -> Optional[Tool]:
         """增加访问次数"""
