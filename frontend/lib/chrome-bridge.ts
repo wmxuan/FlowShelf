@@ -231,3 +231,46 @@ export function onTabEvent(listener: TabEventListener): () => void {
   tabEventListeners.add(listener);
   return () => tabEventListeners.delete(listener);
 }
+
+/** AI 分组结果 → Chrome 原生标签群组的映射结构 */
+export interface TabGroupRequest {
+  name: string;
+  tabIds: number[];
+}
+
+/** 一键整理结果 */
+export interface GroupTabsResult {
+  success: boolean;
+  results?: {
+    name: string;
+    windowId: number;
+    groupId: number;
+    tabCount: number;
+  }[];
+  error?: string;
+}
+
+/**
+ * 一键整理：将 AI 分组结果应用为 Chrome 原生标签群组。
+ *
+ * 后端会先解散所有窗口的现有群组，再按分组逐组创建群组并设置名称/颜色。
+ * 跨窗口的同一分组会在每个窗口分别创建同名群组。
+ */
+export async function groupTabs(
+  groups: TabGroupRequest[]
+): Promise<GroupTabsResult> {
+  try {
+    const ready = await waitForBridge(2000);
+    if (!ready) {
+      return { success: false, error: "Bridge 不可用" };
+    }
+    const result = await callBridge<GroupTabsResult>("groupTabs", { groups });
+    return result || { success: false, error: "无响应" };
+  } catch (err) {
+    console.error("[FlowShelf] groupTabs failed:", err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
