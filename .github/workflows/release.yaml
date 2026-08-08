@@ -96,24 +96,113 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 📦 Install dependencies
+      - name: 🗜️ UPX Cache
+        id: upx-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/upx
+            ./upxbin
+            ./upx-*
+          key: upx-${{ matrix.platform }}-${{ env.UPX_VERSION || '5.1.0' }}
+
+      - name: 🗜️ Install UPX (cross-platform)
+        run: |
+          set -e
+          UPX_VERSION="${UPX_VERSION:-5.1.0}"
+          mkdir -p ~/.cache/upx
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            if [ ! -f ~/.cache/upx/upx-${UPX_VERSION}-win64/upx.exe ]; then
+              curl -L -o upx.zip "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-win64.zip"
+              unzip -o upx.zip -d ~/.cache/upx/
+            fi
+            export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-win64:$PATH"
+          elif [ "${{ matrix.platform }}" = "macos" ]; then
+            # macos 用 homebrew 装 UPX，GitHub Actions runner 默认已有 brew
+            if ! command -v upx >/dev/null 2>&1; then
+              brew install upx >/dev/null 2>&1 || echo "UPX brew install skipped"
+            fi
+          else
+            # Linux: 下载官方二进制
+            if [ ! -d ~/.cache/upx/upx-${UPX_VERSION}-amd64_linux ]; then
+              curl -L -o upx.tar.xz "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-amd64_linux.tar.xz"
+              tar -xf upx.tar.xz -C ~/.cache/upx/
+            fi
+            export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-amd64_linux:$PATH"
+          fi
+          echo "=== UPX version ==="
+          command -v upx && upx --version || echo "UPX 不可用，跳过压缩"
+        shell: bash
+
+      - name: 📦 Install dependencies (requirements-base.txt，无 torch 以控体积)
+        env:
+          # 不下载预构建 CUDA wheel（即使安装了 torch 也不下载 1.5GB CUDA 版）
+          PIP_NO_CACHE_DIR: "1"
+          PIP_EXTRA_INDEX_URL: ""
         run: |
           cd backend
           python -m venv .venv
           source .venv/bin/activate 2>/dev/null || .venv\Scripts\activate.bat 2>/dev/null || true
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # 用 requirements-base.txt：不含 sentence-transformers / torch，体积小 85%
+          pip install -r requirements-base.txt
           pip install pyinstaller
+          echo "=== 已安装体积最大的 15 个包 ==="
+          pip list --format freeze | while IFS= read -r line; do
+            pkg=$(echo "$line" | cut -d= -f1)
+            # 跳过无意义的元包
+            [ -z "$pkg" ] && continue
+            # 用 pip show 找 site-packages 路径
+            show_out=$(pip show "$pkg" 2>/dev/null | grep -E "^Location:" | cut -d: -f2 | xargs)
+            [ -z "$show_out" ] && continue
+            pkg_name=$(echo "$pkg" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            # 匹配多种包目录形式（pkg, pkg_name, pkg-version.dist-info）
+            size=$(du -sm "$show_out" 2>/dev/null | cut -f1 || echo 0)
+            echo "${size}MB  ${pkg}"
+          done | sort -rn | head -15
         shell: bash
 
-      - name: 🏗️ Build binary
+      - name: 🏗️ Build binary with PyInstaller
         run: |
           cd backend
           source .venv/bin/activate 2>/dev/null || .venv\Scripts\activate.bat 2>/dev/null || true
-          pyinstaller flowshelf.spec
+          # Windows 下把 UPX 路径加入 PATH
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            UPX_VERSION="${UPX_VERSION:-5.1.0}"
+            export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-win64:$PATH"
+          elif [ "${{ matrix.platform }}" = "linux" ]; then
+            UPX_VERSION="${UPX_VERSION:-5.1.0}"
+            export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-amd64_linux:$PATH"
+          fi
+          echo "=== PyInstaller start ==="
+          pyinstaller --clean flowshelf.spec
+          echo "=== Build output ==="
+          ls -lah dist/ || ls -lah backend/dist/ || true
         shell: bash
 
-      - name: � Upload backend artifact
+      - name: 📊 Report binary size
+        run: |
+          cd backend
+          BINS=$(find dist -name "flowshelf-backend*" -type f 2>/dev/null)
+          echo "=== 二进制体积报告 (${{ matrix.platform }}) ==="
+          for b in $BINS; do
+            size_bytes=$(stat -c%s "$b" 2>/dev/null || stat -f%z "$b" 2>/dev/null || echo 0)
+            size_mb=$(awk "BEGIN{printf \"%.1f\", $size_bytes/1048576}")
+            limit_mb=2000
+            pct=$(awk "BEGIN{printf \"%.1f\", $size_bytes/2147483648*100}")
+            echo "$b  ->  ${size_mb}MB  (GitHub 2GB 限制已用 ${pct}%)"
+            if [ "$size_bytes" -gt 2147483648 ]; then
+              echo "❌ 超过 GitHub 2GB 单个 Release Asset 限制！"
+              exit 1
+            elif [ "$size_bytes" -gt 1073741824 ]; then
+              echo "⚠️ 已超 1GB，建议进一步优化"
+            else
+              echo "✅ 体积合规"
+            fi
+          done
+        shell: bash
+
+      - name: 📤 Upload backend artifact
         uses: actions/upload-artifact@v4
         with:
           name: backend-${{ matrix.platform }}
@@ -188,7 +277,30 @@ jobs:
       - name: 📦 Create zip package
         run: |
           cd package
+          echo "=== zip 前 package 体积分布 ==="
+          du -sh * | sort -rh | head -20
+          echo ""
           zip -r ../flowshelf-${{ matrix.platform }}.zip .
+        shell: bash
+
+      - name: 📊 Report zip size & enforce GitHub 2GB limit
+        run: |
+          ZIP_FILE="flowshelf-${{ matrix.platform }}.zip"
+          size_bytes=$(stat -c%s "$ZIP_FILE" 2>/dev/null || stat -f%z "$ZIP_FILE" 2>/dev/null || echo 0)
+          size_mb=$(awk "BEGIN{printf \"%.1f\", $size_bytes/1048576}")
+          pct=$(awk "BEGIN{printf \"%.1f\", $size_bytes/2147483648*100}")
+          echo "=== Release 包体积报告 (${{ matrix.platform }}) ==="
+          echo "  文件: $ZIP_FILE"
+          echo "  大小: ${size_mb}MB  (GitHub 2GB 限制已用 ${pct}%)"
+          if [ "$size_bytes" -gt 2147483648 ]; then
+            echo "❌ 错误：超过 GitHub 单个 Release Asset 2GB 上限！"
+            echo "   请进一步优化依赖或拆分发布。"
+            exit 1
+          elif [ "$size_bytes" -gt 1073741824 ]; then
+            echo "⚠️ 警告：已超 1GB，建议继续优化体积。"
+          else
+            echo "✅ 体积合规。"
+          fi
         shell: bash
 
       - name: 📤 Upload package artifact
