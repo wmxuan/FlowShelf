@@ -9,7 +9,7 @@
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import asyncio
@@ -38,9 +38,55 @@ class LearningService:
         """
         快速保存待学习项（轻量），然后后台异步触发 AI 补全。
 
+        跨入口去重（60s 内同 URL 不重复创建）：覆盖浏览器 ⭐️、扩展 popup、Bookmarklet
+        三条链路，避免「先点 popup 再点 ⭐️」产生两条看起来像丢失的重复记录。
+        匹配命中条件：同一 source_url，is_converted=False，创建时间 < 60s；
+        此时直接返回已存在条目（允许 item_type 不同，优先返回未转化项，避免
+        用户在待分类 tab 找不到自己刚 ⭐️ 的 URL 以为丢了）。
+
+        当 item_type == "unspecified" 时（一键入口：书签/bookmarklet），因未知用户意图，
+        跳过后台 AI 补全，**不**提前生成错误类型的内容；等用户在暂存区选择类型后，
+        convert_item 会同步生成正确类型的内容。
+
         Returns:
             LearningItem（is_ready=False，AI 内容尚未补全）
         """
+        # --------- 跨入口 60s 同 URL 去重 ---------
+        # 注意：DB created_at 用 server_default=func.now()（SQLite CURRENT_TIMESTAMP），是 UTC 时间。
+        # 这里必须同样用 UTC，否则 Asia/Shanghai (UTC+8) 会差 8 小时导致 WHERE 永远不命中。
+        sixty_sec_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            seconds=60
+        )
+        result = await self.db.execute(
+            select(LearningItem).where(
+                LearningItem.source_url == data.source_url,
+                LearningItem.is_converted == False,  # 未转化的仍在暂存区
+                LearningItem.created_at >= sixty_sec_ago,
+            )
+        )
+        existing: Optional[LearningItem] = result.scalars().first()
+        if existing:
+            logger.info(
+                "create_item 命中 60s 同 URL 去重：source_url=%s 已存在 item #%s (type=%s)，直接返回",
+                data.source_url,
+                existing.id,
+                existing.item_type,
+            )
+            # 如果新请求带了 item_type，比现有 "unspecified" 更明确 → 升级类型保留（给用户明确感）
+            if existing.item_type == "unspecified" and data.item_type in (
+                "article",
+                "tool",
+            ):
+                existing.item_type = data.item_type
+                # 升级后若还没启动 AI 补全，启动一次
+                if data.content and not existing.is_ready:
+                    asyncio.create_task(
+                        self._ai_enrich(existing.id, data.content, data.item_type)
+                    )
+                await self.db.commit()
+                await self.db.refresh(existing)
+            return existing
+
         item = LearningItem(
             source_url=data.source_url,
             title=data.title,
@@ -54,9 +100,14 @@ class LearningService:
 
         # 后台异步 AI 补全（不阻塞响应）
         content_text = data.content or ""
-        if content_text:
+        if content_text and data.item_type != "unspecified":
             # 用 create_task 异步执行，不等待结果
             asyncio.create_task(self._ai_enrich(item.id, content_text, data.item_type))
+        elif data.item_type == "unspecified":
+            logger.info(
+                "待学习项 %d item_type=unspecified，跳过后台 AI 补全（等用户在暂存区选择类型后再生成）",
+                item.id,
+            )
         else:
             logger.info(
                 "待学习项 %d 无正文，跳过 AI 补全（将在用户打开 Web 应用时触发）",
@@ -182,33 +233,76 @@ class LearningService:
         """
         将待学习项转换为卡片或工具。
 
-        如果 is_ready=False，会先触发一次 AI 补全（同步等待）。
+        1. 先应用用户覆盖（例如从未指定类型的条目 → 指定为 article/tool）。
+        2. 按最终类型检查 AI 内容是否齐全：
+           - article：需要 ai_summary + is_ready
+           - tool：需要 tool_description + is_ready
+           缺失则同步补全，使用最终类型对应的 AI 模板。
+        3. 按最终类型写入 cards 或 tools 表。
+
         转换后 is_converted=True，记录 converted_id。
         """
         item = await self._get_item(item_id)
         if not item:
             return None
 
-        # 若 AI 内容未就绪，先同步补全（用存储的 content）
-        if not item.is_ready and item.ai_summary is None:
-            logger.info("待学习项 %d AI 内容未就绪，同步补全中...", item_id)
-            stored_content = item.content or ""
-            if not stored_content:
-                raise ValueError(
-                    "AI 内容尚未生成，且无存储正文可用于补全。请稍后再试或手动重新生成。"
-                )
-            await self._ai_enrich(item.id, stored_content, item.item_type)
-            item = await self._get_item(item_id)
-            if not item:
-                return None
-
-        # 应用用户覆盖数据
+        # （1）先应用用户覆盖数据（包含 item_type/标题/标签等）
         if overwrite_data:
             for key, value in overwrite_data.items():
                 if value is not None and hasattr(item, key):
                     setattr(item, key, value)
 
-        # 转换为卡片或工具
+        # 最终类型必须是 article 或 tool
+        if item.item_type not in ("article", "tool"):
+            raise ValueError(
+                f"转换前必须指定类型（article 或 tool），当前 item_type={item.item_type!r}"
+            )
+
+        # （2）按最终类型判断 AI 内容是否就绪；缺失则同步补全
+        needs_enrich = False
+        if not item.is_ready:
+            needs_enrich = True
+        elif item.item_type == "article" and not item.ai_summary:
+            needs_enrich = True
+        elif item.item_type == "tool" and not item.tool_description:
+            needs_enrich = True
+
+        if needs_enrich:
+            stored_content = item.content or ""
+            if not stored_content:
+                raise ValueError(
+                    "AI 内容尚未生成，且无存储正文可用于补全。请稍后再试或手动重新生成。"
+                )
+            logger.info(
+                "待学习项 %d 按类型 %s 同步补全 AI 内容...",
+                item_id,
+                item.item_type,
+            )
+            # 先提交当前会话的 overwrite 修改（结束事务）。
+            # 否则 _ai_enrich 用独立 bg_db 会话 commit 的 AI 内容对 self.db
+            # 当前事务不可见（SQLite 快照隔离），导致后续 _get_item 读到的
+            # ai_summary 仍为旧值 → 写入 cards 时为空字符串。
+            await self.db.commit()
+            await self._ai_enrich(item.id, stored_content, item.item_type)
+            # _ai_enrich 在独立 bg_db 会话中已 commit；但 self.db 的 identity map
+            # 缓存了旧 item 对象（expire_on_commit=False 不会自动失效），SELECT 会
+            # 返回缓存对象而不刷新属性。必须 expire_all 强制下次查询从 DB 重新加载。
+            self.db.expire_all()
+            item = await self._get_item(item_id)
+            if not item:
+                return None
+            # 校验 AI 补全确实成功（_ai_enrich 内部 try/except 会吞掉 AI 异常，
+            # 这里兜底防止空内容落库到 cards/tools）
+            if item.item_type == "article" and not item.ai_summary:
+                raise ValueError(
+                    "AI 摘要生成失败，请稍后重试或在卡片中手动填写摘要。"
+                )
+            if item.item_type == "tool" and not item.tool_description:
+                raise ValueError(
+                    "AI 工具描述生成失败，请稍后重试或手动填写描述。"
+                )
+
+        # （3）转换为卡片或工具（按最终类型分支）
         if item.item_type == "article":
             card = Card(
                 source_url=item.source_url,

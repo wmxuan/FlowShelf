@@ -20,6 +20,8 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    emptyOutDir: true,
+    // watch 模式下增量构建不清空 outDir，避免 @crxjs 多轮重建时互相清空产物，
+    // 导致 manifest 引用的 JS/CSS/png 间歇性从 dist 消失、Chrome 扩展无法加载。
+    emptyOutDir: false,
   },
 })

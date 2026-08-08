@@ -44,13 +44,15 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS 配置：allow_origins 覆盖 Web 应用来源，allow_origin_regex 覆盖扩展来源
-    # （扩展 ID 在开发期不稳定，用正则匹配 chrome-extension://<任意ID>）
+    # CORS 配置：放行任意来源。
+    # bookmarklet 在任意网页上下文中直接 fetch /api/learning，Origin 不固定；
+    # 当前无鉴权，allow_credentials=False（无 cookie 依赖），放行 * 不带来凭据泄露风险。
+    # 注意：allow_credentials=False 时，浏览器对跨域 fetch 不发送 cookie，
+    # Web 端 fetch 默认 same-origin 不受影响，扩展端 fetch 亦不依赖 cookie。
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
-        allow_origin_regex=r"chrome-extension://.*",
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

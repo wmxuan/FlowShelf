@@ -94,10 +94,10 @@ export default function HomePage() {
         <div className="flex flex-col items-center gap-4 text-center">
           <h2 className="text-2xl font-bold">一键收藏，随时随地</h2>
           <p className="text-muted-foreground max-w-xl">
-            把下方的按钮拖到浏览器书签栏，在任意网页点击即可收藏到 FlowShelf，AI 自动生成知识卡片。
+            把下方的按钮拖到浏览器书签栏，在任意网页点击即可一键收藏到 FlowShelf 待分类暂存区，然后在 Web 应用中选择归档为「知识卡片」还是「工具」。
           </p>
           <a
-            href="javascript:void(window.open('http://localhost:3000/bookmarklet?url='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title)))"
+            href="javascript:(function(){function s(m,o){var t=document.createElement('div');t.textContent=m;t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:2147483647;padding:12px 20px;border-radius:8px;font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:#fff;background:'+(o?'#10b981':'#dc2626')+';box-shadow:0 4px 12px rgba(0,0,0,.15);max-width:80vw;word-break:break-word;white-space:pre-line;';document.body.appendChild(t);setTimeout(function(){t.remove();},3500);}try{var c=document.body&&document.body.innerText?document.body.innerText.slice(0,50000):'';fetch('http://localhost:8000/api/learning',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_url:location.href,title:document.title,item_type:'unspecified',content:c})}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(){s('✅ 已放入待分类暂存区\n请在 Web 应用中选择归档类型',true);}).catch(function(e){s('❌ 收藏失败：'+e.message,false);});}catch(e){s('❌ 收藏失败：'+e.message,false);}})();"
             className="button button-primary text-base px-6 py-3 cursor-move"
             title="拖拽到浏览器书签栏"
             onClick={(e) => e.preventDefault()}

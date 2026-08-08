@@ -3,9 +3,19 @@
   "name": "FlowShelf",
   "version": "0.1.0",
   "description": "AI 原生的个人数字资产管家 - 浏览器扩展",
+  "icons": {
+    "16": "assets/icon512.png",
+    "128": "assets/icon512.png",
+    "512": "assets/icon512.png"
+  },
   "action": {
     "default_title": "FlowShelf",
-    "default_popup": "src/popup/index.html"
+    "default_popup": "src/popup/index.html",
+    "default_icon": "assets/icon512.png"
+  },
+  "options_ui": {
+    "page": "src/options/index.html",
+    "open_in_tab": true
   },
   "chrome_url_overrides": {
     "newtab": "src/newtab/index.html"

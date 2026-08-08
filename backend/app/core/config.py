@@ -35,10 +35,11 @@ class Settings(BaseSettings):
     # 服务器
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    CORS_ORIGINS: list[str] = [
-        "http://localhost:3000",
-        "http://localhost:3001",
-    ]
+    # CORS：放行任意来源。
+    # 理由：bookmarklet 在任意网页上下文中直接 fetch /api/learning，
+    # 来源 Origin 不固定；当前无鉴权（无 cookie 依赖），allow_credentials=False，
+    # 放行 * 不会带来凭据泄露风险。Web 端 fetch 默认 same-origin，不受影响。
+    CORS_ORIGINS: list[str] = ["*"]
 
     # 正文抽取
     MAX_CONTENT_LENGTH: int = 50000  # 最大处理字符数
