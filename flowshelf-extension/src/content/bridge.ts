@@ -13,6 +13,7 @@
  *   CS → Web: window.postMessage({ source: 'flowshelf-bridge', result/error, id })
  *   CS → BG:  chrome.runtime.sendMessage({ type: 'bridge-action', action, payload })
  *   BG → CS:  chrome.tabs.sendMessage(tabId, { type: 'tab-event', event, tab })
+ *   BG → CS:  chrome.tabs.sendMessage(tabId, { type: 'group-event', event, group })
  */
 
 const BRIDGE_SOURCE = "flowshelf-bridge";
@@ -80,17 +81,31 @@ window.addEventListener("message", (event) => {
 
 // 监听 Background SW 转发的标签事件，relay 给 Web 页面
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type !== "tab-event") return;
+  if (message.type === "tab-event") {
+    window.postMessage(
+      {
+        source: BRIDGE_SOURCE,
+        eventType: "tabEvent",
+        event: message.event, // 'created' | 'updated' | 'removed' | 'grouped'
+        tab: message.tab,
+      },
+      "*"
+    );
+    return;
+  }
 
-  window.postMessage(
-    {
-      source: BRIDGE_SOURCE,
-      eventType: "tabEvent",
-      event: message.event, // 'created' | 'updated' | 'removed'
-      tab: message.tab,
-    },
-    "*"
-  );
+  if (message.type === "group-event") {
+    window.postMessage(
+      {
+        source: BRIDGE_SOURCE,
+        eventType: "groupEvent",
+        event: message.event, // 'created' | 'updated' | 'removed'
+        group: message.group,
+      },
+      "*"
+    );
+    return;
+  }
 });
 
 // 页面加载时发一次 ready（可能在 Web JS 加载前）

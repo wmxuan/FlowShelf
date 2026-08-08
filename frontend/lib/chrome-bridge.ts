@@ -13,17 +13,27 @@ export interface ChromeTabInfo {
   title: string;
   favIconUrl?: string;
   windowId?: number;
+  groupId?: number;
   active?: boolean;
 }
 
+/** Chrome 原生标签群组信息 */
+export interface ChromeTabGroupInfo {
+  id: number;
+  title: string;
+  color: string;
+  windowId: number;
+}
+
 /** 标签页事件类型 */
-export type TabEventType = "created" | "updated" | "removed";
+export type TabEventType = "created" | "updated" | "removed" | "grouped";
 
 /** 标签页变更信息（onUpdated 时包含 changeInfo） */
 export interface TabChangeInfo {
   url?: string;
   title?: string;
   favIconUrl?: string;
+  groupId?: number;
 }
 
 /** 标签页事件数据 */
@@ -32,7 +42,17 @@ export interface TabEventData {
   tab: ChromeTabInfo & { changeInfo?: TabChangeInfo };
 }
 
+/** Chrome 原生标签群组事件类型 */
+export type GroupEventType = "created" | "updated" | "removed";
+
+/** Chrome 原生标签群组事件数据 */
+export interface GroupEventData {
+  event: GroupEventType;
+  group: ChromeTabGroupInfo;
+}
+
 type TabEventListener = (data: TabEventData) => void;
+type GroupEventListener = (data: GroupEventData) => void;
 
 type BridgeCallback = (result: unknown, error?: string) => void;
 
@@ -45,6 +65,9 @@ let bridgeReadyCheckers: (() => void)[] = [];
 
 // 标签页事件监听器集合
 const tabEventListeners = new Set<TabEventListener>();
+
+// 群组事件监听器集合
+const groupEventListeners = new Set<GroupEventListener>();
 
 // 监听来自 Content Script 的回复
 if (typeof window !== "undefined") {
@@ -73,6 +96,16 @@ if (typeof window !== "undefined") {
         tab: data.tab,
       };
       tabEventListeners.forEach((fn) => fn(eventData));
+      return;
+    }
+
+    // 群组事件（由 Background SW → CS → 这里转发）
+    if (data.eventType === "groupEvent") {
+      const eventData: GroupEventData = {
+        event: data.event,
+        group: data.group,
+      };
+      groupEventListeners.forEach((fn) => fn(eventData));
       return;
     }
 
@@ -224,12 +257,36 @@ export async function getCurrentTab(): Promise<ChromeTabInfo | null> {
 }
 
 /**
- * 订阅标签页事件（新增/关闭/URL变化）
+ * 获取所有 Chrome 原生标签群组（含名称和颜色）
+ */
+export async function getTabGroups(): Promise<ChromeTabGroupInfo[]> {
+  try {
+    const ready = await waitForBridge(2000);
+    if (!ready) return [];
+    const groups = await callBridge<ChromeTabGroupInfo[]>("getTabGroups");
+    return Array.isArray(groups) ? groups : [];
+  } catch (err) {
+    console.error("[FlowShelf] getTabGroups failed:", err);
+    return [];
+  }
+}
+
+/**
+ * 订阅标签页事件（新增/关闭/URL变化/换群组）
  * 返回取消订阅函数
  */
 export function onTabEvent(listener: TabEventListener): () => void {
   tabEventListeners.add(listener);
   return () => tabEventListeners.delete(listener);
+}
+
+/**
+ * 订阅 Chrome 原生标签群组事件（创建/改名/解散）
+ * 返回取消订阅函数
+ */
+export function onGroupEvent(listener: GroupEventListener): () => void {
+  groupEventListeners.add(listener);
+  return () => groupEventListeners.delete(listener);
 }
 
 /** AI 分组结果 → Chrome 原生标签群组的映射结构 */
