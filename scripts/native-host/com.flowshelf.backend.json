@@ -1,0 +1,9 @@
+{
+  "name": "com.flowshelf.backend",
+  "description": "FlowShelf Backend Server",
+  "path": "PLACEHOLDER_BINARY_PATH",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://3aa3451962e4f139333083bbca7fd03d/"
+  ]
+}

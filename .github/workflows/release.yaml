@@ -1,0 +1,240 @@
+name: Build & Release FlowShelf
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      create-release:
+        description: "是否创建 Release"
+        required: false
+        default: "no"
+        type: choice
+        options:
+          - "yes"
+          - "no"
+
+jobs:
+  # ── 1. 构建前端静态文件 ──────────────────────────────────
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 📥 Install dependencies
+        run: cd frontend && npm ci
+
+      - name: 🏗️ Build static site
+        run: cd frontend && npm run build
+
+      - name: 📤 Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/out/
+
+  # ── 2. 构建浏览器扩展 ──────────────────────────────────
+  build-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: flowshelf-extension/package-lock.json
+
+      - name: 📥 Install dependencies
+        run: cd flowshelf-extension && npm ci
+
+      - name: 🏗️ Build extension
+        run: cd flowshelf-extension && npm run build
+
+      - name: 📤 Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-dist
+          path: flowshelf-extension/dist/
+
+  # ── 3. 构建后端二进制（跨平台） ──────────────────────────
+  build-backend:
+    needs: build-frontend
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: backend/frontend_dist/
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: |
+          cd backend
+          python -m venv .venv
+          source .venv/bin/activate 2>/dev/null || .venv\Scripts\activate.bat 2>/dev/null || true
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+        shell: bash
+
+      - name: 🏗️ Build binary
+        run: |
+          cd backend
+          source .venv/bin/activate 2>/dev/null || .venv\Scripts\activate.bat 2>/dev/null || true
+          pyinstaller flowshelf.spec
+        shell: bash
+
+      - name: � Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-${{ matrix.platform }}
+          path: backend/dist/flowshelf-backend*
+
+  # ── 4. 打包发布物 ──────────────────────────────────────
+  package:
+    needs: [build-backend, build-extension]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: macos
+            ext: ""
+            script: "install-macos.sh"
+          - platform: windows
+            ext: ".exe"
+            script: "install-windows.bat"
+          - platform: linux
+            ext: ""
+            script: "install-linux.sh"
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download backend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-${{ matrix.platform }}
+          path: package/
+
+      - name: 📥 Download extension artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-dist
+          path: package/flowshelf-extension/
+
+      - name: 📥 Copy install scripts
+        run: |
+          cp scripts/${{ matrix.script }} package/
+          cp -r scripts/native-host package/native-host
+        shell: bash
+
+      - name: 📝 Create install README
+        run: |
+          cat > package/INSTALL.txt << 'EOF'
+          FlowShelf 安装说明
+          ===================
+
+          1. 运行安装脚本：
+             - macOS/Linux: ./install-macos.sh 或 ./install-linux.sh
+             - Windows: 双击 install-windows.bat
+
+          2. 打开 Chrome 浏览器 → chrome://extensions
+          3. 开启「开发者模式」
+          4. 点击「加载已解压的扩展程序」→ 选择 flowshelf-extension 目录
+          5. 扩展加载后，后端会自动启动！
+
+          如需手动启动后端：
+             ./flowshelf-backend
+
+          访问 Web 应用：
+             http://localhost:8972
+          EOF
+        shell: bash
+
+      - name: 📦 Set binary permissions
+        if: matrix.platform != 'windows'
+        run: chmod +x package/flowshelf-backend
+        shell: bash
+
+      - name: 📦 Create zip package
+        run: |
+          cd package
+          zip -r ../flowshelf-${{ matrix.platform }}.zip .
+        shell: bash
+
+      - name: 📤 Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowshelf-${{ matrix.platform }}
+          path: flowshelf-${{ matrix.platform }}.zip
+
+  # ── 5. 创建 GitHub Release ─────────────────────────────
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create-release == 'yes')
+    permissions:
+      contents: write
+    steps:
+      - name: 📥 Download all packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: flowshelf-*
+          path: release/
+
+      - name: 📋 List release files
+        run: find release/ -type f -name "*.zip" | sort
+        shell: bash
+
+      - name: 🚀 Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: FlowShelf ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+          files: release/**/*.zip
+          body: |
+            ## FlowShelf ${{ github.ref_name }}
+
+            ### 下载
+            | 平台 | 文件 |
+            |------|------|
+            | macOS | `flowshelf-macos.zip` |
+            | Windows | `flowshelf-windows.zip` |
+            | Linux | `flowshelf-linux.zip` |
+
+            ### 安装步骤
+            1. 解压对应平台的 zip 文件
+            2. 运行安装脚本（macOS/Linux: `./install-macos.sh`，Windows: `install-windows.bat`）
+            3. 在 Chrome 中加载 `flowshelf-extension` 目录（开发者模式）
+            4. 扩展加载后，后端自动启动 🎉

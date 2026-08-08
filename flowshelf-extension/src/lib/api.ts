@@ -18,14 +18,14 @@ import type {
   ToolSaved,
 } from "./types";
 
-/** 默认后端地址（开发环境） */
-export const DEFAULT_API_BASE = "http://localhost:8000";
+/** 默认后端地址（FlowShelf 自托管模式默认端口 8972） */
+export const DEFAULT_API_BASE = "http://localhost:8972";
 
 /** storage key：后端 API 地址 */
 export const API_BASE_KEY = "flowshelf_api_base";
 
-/** 默认 Web 应用地址（cards / toolbox 页面所在站点） */
-export const DEFAULT_WEB_BASE = "http://localhost:3000";
+/** 默认 Web 应用地址（与后端同一端口，自托管模式） */
+export const DEFAULT_WEB_BASE = "http://localhost:8972";
 
 /** storage key：Web 应用地址 */
 export const WEB_BASE_KEY = "flowshelf_web_base";

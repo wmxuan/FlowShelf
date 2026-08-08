@@ -4,7 +4,9 @@ FastAPI 主入口
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from app.core.config import get_settings
 from app.core.database import init_db
@@ -74,6 +76,13 @@ def create_app() -> FastAPI:
             "version": settings.APP_VERSION,
             "demo_mode": settings.DEMO_MODE,
         }
+
+    # 托管前端静态文件（必须在所有 API 路由之后挂载，确保 API 优先匹配）
+    frontend_dist = Path(__file__).parent.parent / "frontend_dist"
+    if frontend_dist.is_dir():
+        app.mount(
+            "/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend"
+        )
 
     return app
 
