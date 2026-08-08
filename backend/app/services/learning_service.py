@@ -132,7 +132,20 @@ class LearningService:
                     await bg_db.commit()
                     logger.info("待学习项 %d AI 补全完成", item_id)
             except Exception as exc:
+                # 失败时设置 is_ready=True，标记"已尝试"，避免前端误报为"生成中"
+                # 前端通过 is_ready=true && AI 内容为空 判定为"生成失败"，显示重新生成按钮
                 logger.error("待学习项 %d AI 补全失败：%s", item_id, exc)
+                try:
+                    await bg_db.execute(
+                        update(LearningItem)
+                        .where(LearningItem.id == item_id)
+                        .values(is_ready=True, updated_at=datetime.now())
+                    )
+                    await bg_db.commit()
+                except Exception as inner_exc:
+                    logger.error(
+                        "待学习项 %d 标记失败状态时出错：%s", item_id, inner_exc
+                    )
 
     async def _do_ai_enrich(
         self, db: AsyncSession, item_id: int, content: str, item_type: str
@@ -344,6 +357,23 @@ class LearningService:
         await self.db.delete(item)
         await self.db.commit()
         return True
+
+    async def update_item(
+        self, item_id: int, update_data: dict
+    ) -> Optional[LearningItem]:
+        """编辑待学习项的 AI 生成内容（标题/摘要/关键观点/标签/工具描述）。
+
+        仅更新传入的非 None 字段。编辑后的内容在 convert 时透传到 cards/tools 表。
+        """
+        item = await self._get_item(item_id)
+        if not item:
+            return None
+        for key, value in update_data.items():
+            if value is not None and hasattr(item, key):
+                setattr(item, key, value)
+        await self.db.commit()
+        await self.db.refresh(item)
+        return item
 
     async def trigger_enrich(
         self, item_id: int, content: str = ""

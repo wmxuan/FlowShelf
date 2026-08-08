@@ -6,9 +6,9 @@ import { useState } from 'react';
 
 const NAV_ITEMS = [
   { href: '/tabs', label: '🗂️ Tab 管理' },
-  { href: '/learning', label: '📥 暂存区' },
   { href: '/cards', label: '📚 卡片库' },
   { href: '/toolbox', label: '🛠️ 工具箱' },
+  { href: '/learning', label: '📥 暂存区' },
 ];
 
 export default function Header() {
