@@ -135,10 +135,6 @@ jobs:
         shell: bash
 
       - name: 📦 Install dependencies (requirements-base.txt，无 torch 以控体积)
-        env:
-          # 不下载预构建 CUDA wheel（即使安装了 torch 也不下载 1.5GB CUDA 版）
-          PIP_NO_CACHE_DIR: "1"
-          PIP_EXTRA_INDEX_URL: ""
         run: |
           cd backend
           python -m venv .venv
@@ -147,19 +143,8 @@ jobs:
           # 用 requirements-base.txt：不含 sentence-transformers / torch，体积小 85%
           pip install -r requirements-base.txt
           pip install pyinstaller
-          echo "=== 已安装体积最大的 15 个包 ==="
-          pip list --format freeze | while IFS= read -r line; do
-            pkg=$(echo "$line" | cut -d= -f1)
-            # 跳过无意义的元包
-            [ -z "$pkg" ] && continue
-            # 用 pip show 找 site-packages 路径
-            show_out=$(pip show "$pkg" 2>/dev/null | grep -E "^Location:" | cut -d: -f2 | xargs)
-            [ -z "$show_out" ] && continue
-            pkg_name=$(echo "$pkg" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-            # 匹配多种包目录形式（pkg, pkg_name, pkg-version.dist-info）
-            size=$(du -sm "$show_out" 2>/dev/null | cut -f1 || echo 0)
-            echo "${size}MB  ${pkg}"
-          done | sort -rn | head -15
+          echo "=== 已安装包列表 ==="
+          pip list
         shell: bash
 
       - name: 🏗️ Build binary with PyInstaller
