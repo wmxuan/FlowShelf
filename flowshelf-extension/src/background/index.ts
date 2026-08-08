@@ -257,7 +257,17 @@ async function handleBridgeAction(
         title: t.title,
         favIconUrl: t.favIconUrl,
         windowId: t.windowId,
+        groupId: t.groupId,
         active: t.active,
+      }));
+    }
+    case "getTabGroups": {
+      const groups = await chrome.tabGroups.query({});
+      return groups.map((g) => ({
+        id: g.id,
+        title: g.title || "",
+        color: g.color,
+        windowId: g.windowId,
       }));
     }
     case "closeTab": {
@@ -452,6 +462,7 @@ chrome.tabs.onCreated.addListener((tab) => {
     title: tab.title,
     favIconUrl: tab.favIconUrl,
     windowId: tab.windowId,
+    groupId: tab.groupId,
     active: tab.active,
   });
 });
@@ -463,13 +474,69 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     title: tab.title,
     favIconUrl: tab.favIconUrl,
     windowId: tab.windowId,
+    groupId: tab.groupId,
     active: tab.active,
     changeInfo,
   });
+
+  // 标签在浏览器中换群组 → 额外转发 grouped 事件，让 Web 应用同步分组归属
+  if (Object.prototype.hasOwnProperty.call(changeInfo, "groupId") && tab) {
+    forwardTabEvent("grouped", {
+      id: tabId,
+      url: tab.url,
+      title: tab.title,
+      favIconUrl: tab.favIconUrl,
+      windowId: tab.windowId,
+      groupId: tab.groupId,
+      active: tab.active,
+    });
+  }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   forwardTabEvent("removed", { id: tabId });
+});
+
+// ============ Chrome 原生标签群组事件转发 ============
+// 群组创建/改名/解散 → 转发为 groupEvent，Web 应用同步分组名称与归属
+
+/** 将群组事件转发给 Web 应用页面的 Content Script */
+function forwardGroupEvent(
+  eventType: "created" | "updated" | "removed",
+  group: chrome.tabGroups.TabGroup
+): void {
+  chrome.tabs.query({ url: WEB_APP_URL_PATTERNS }).then((tabs) => {
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.tabs
+          .sendMessage(tab.id, {
+            type: "group-event",
+            event: eventType,
+            group: {
+              id: group.id,
+              title: group.title || "",
+              color: group.color,
+              windowId: group.windowId,
+            },
+          })
+          .catch(() => {
+            // 目标 tab 没有 content script，静默忽略
+          });
+      }
+    }
+  });
+}
+
+chrome.tabGroups.onCreated.addListener((group) => {
+  forwardGroupEvent("created", group);
+});
+
+chrome.tabGroups.onUpdated.addListener((group) => {
+  forwardGroupEvent("updated", group);
+});
+
+chrome.tabGroups.onRemoved.addListener((group) => {
+  forwardGroupEvent("removed", group);
 });
 
 export {};

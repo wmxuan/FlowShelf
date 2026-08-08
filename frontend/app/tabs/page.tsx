@@ -28,25 +28,24 @@ import {
   getTabContent,
   checkBridgeAvailable,
   onTabEvent,
+  onGroupEvent,
   groupTabs,
+  getTabGroups,
   type ChromeTabInfo,
   type TabGroupRequest,
+  type GroupEventData,
 } from '@/lib/chrome-bridge';
 
 interface TabGroup {
   name: string;
   tab_indices: number[];
+  color?: string;
 }
 
 interface TabGroupResponse {
   groups: TabGroup[];
   total: number;
   group_count: number;
-}
-
-interface TabAssignResponse {
-  action: 'assign' | 'create';
-  group_name: string;
 }
 
 /** tab 拖拽时的稳定唯一 id：g-{gi}-i-{tabIndex} */
@@ -79,6 +78,19 @@ const GROUP_COLORS = [
   '#8b5cf6', // purple
   '#f97316', // orange
 ];
+
+/** Chrome 原生群组颜色名 → hex 映射 */
+const CHROME_COLOR_MAP: Record<string, string> = {
+  grey: '#9ca3af',
+  blue: '#3b82f6',
+  cyan: '#06b6d4',
+  red: '#ef4444',
+  yellow: '#f59e0b',
+  green: '#10b981',
+  pink: '#ec4899',
+  purple: '#8b5cf6',
+  orange: '#f97316',
+};
 
 function isHttpTab(url?: string): boolean {
   return !!url && (url.startsWith('http') || url.startsWith('https'));
@@ -221,11 +233,6 @@ export default function TabsPage() {
   const enrichMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [editMode, setEditMode] = useState(false);
-  /** 编辑前快照：取消编辑时恢复 */
-  const [editSnapshot, setEditSnapshot] = useState<{
-    groups: TabGroup[];
-    expanded: Set<number>;
-  } | null>(null);
   /** 当前处于编辑状态的组下标：显示组名输入框 */
   const [editingGroupIdx, setEditingGroupIdx] = useState<number | null>(null);
   const [editingGroupName, setEditingGroupName] = useState('');
@@ -243,12 +250,21 @@ export default function TabsPage() {
   const tabsRef = useRef(tabs);
   const groupsRef = useRef(groups);
   const loadedRef = useRef(false);
+  /** Chrome 原生群组缓存：groupId → { name, color }，供事件处理查群组名 */
+  const chromeGroupsRef = useRef<Map<number, { name: string; color: string }>>(
+    new Map()
+  );
+  /** 编辑模式 ref：事件监听器中读取最新值，决定是否忽略群组级事件 */
+  const editModeRef = useRef(false);
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
   useEffect(() => {
     groupsRef.current = groups;
   }, [groups]);
+  useEffect(() => {
+    editModeRef.current = editMode;
+  }, [editMode]);
 
   const showEnrichMsg = useCallback((msg: string, ms = 4000) => {
     setEnrichMsg(msg);
@@ -256,7 +272,8 @@ export default function TabsPage() {
     enrichMsgTimer.current = setTimeout(() => setEnrichMsg(''), ms);
   }, []);
 
-  const loadAndGroupTabs = useCallback(async () => {
+  /** 加载标签：按 Chrome 原生群组或窗口分组，不调用 AI */
+  const loadTabs = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -270,29 +287,76 @@ export default function TabsPage() {
       );
       setTabs(httpTabs);
 
+      // 始终拉取并缓存 Chrome 群组信息，供后续事件通过 groupId 查名称/颜色
+      const chromeGroups = await getTabGroups();
+      const groupInfoMap = new Map<number, { name: string; color: string }>();
+      for (const g of chromeGroups) {
+        groupInfoMap.set(g.id, {
+          name: g.title || '未命名分组',
+          color: CHROME_COLOR_MAP[g.color] || GROUP_COLORS[0],
+        });
+      }
+      chromeGroupsRef.current = groupInfoMap;
+
       if (httpTabs.length === 0) {
         setGroups([]);
         return;
       }
 
-      if (httpTabs.length <= 1) {
-        setGroups([{ name: '全部标签', tab_indices: httpTabs.map((_, i) => i) }]);
-        setExpandedGroups(new Set([0]));
-        return;
+      // 检查是否有 Chrome 原生群组
+      const hasChromeGroups = httpTabs.some(
+        (t) => t.groupId != null && t.groupId !== -1
+      );
+
+      if (hasChromeGroups) {
+        // 按 Chrome 群组分组
+        const groupByName = new Map<string, { indices: number[]; color?: string }>();
+        const ungroupedIndices: number[] = [];
+        for (let i = 0; i < httpTabs.length; i++) {
+          const gid = httpTabs[i].groupId;
+          if (gid != null && gid !== -1) {
+            const info = groupInfoMap.get(gid);
+            const name = info?.name || '未命名分组';
+            if (!groupByName.has(name)) {
+              groupByName.set(name, { indices: [], color: info?.color });
+            }
+            groupByName.get(name)!.indices.push(i);
+          } else {
+            ungroupedIndices.push(i);
+          }
+        }
+
+        const newGroups: TabGroup[] = Array.from(groupByName.entries()).map(
+          ([name, { indices, color }]) => ({
+            name,
+            tab_indices: indices,
+            color,
+          })
+        );
+        // 未分组放在最后
+        if (ungroupedIndices.length > 0) {
+          newGroups.push({ name: '未分组', tab_indices: ungroupedIndices });
+        }
+        setGroups(newGroups);
+        setExpandedGroups(new Set(newGroups.map((_, i) => i)));
+      } else {
+        // 无 Chrome 群组 → 按窗口分组
+        const windowMap = new Map<number, number[]>();
+        for (let i = 0; i < httpTabs.length; i++) {
+          const wid = httpTabs[i].windowId ?? 0;
+          if (!windowMap.has(wid)) windowMap.set(wid, []);
+          windowMap.get(wid)!.push(i);
+        }
+
+        const newGroups: TabGroup[] = Array.from(windowMap.entries()).map(
+          ([, indices], idx) => ({
+            name: `窗口 ${idx + 1}`,
+            tab_indices: indices,
+          })
+        );
+        setGroups(newGroups);
+        setExpandedGroups(new Set(newGroups.map((_, i) => i)));
       }
-
-      const res = await fetch(`${API_BASE}/api/tabs/group`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tabs: httpTabs.map((t) => ({ url: t.url, title: t.title })),
-        }),
-      });
-
-      if (!res.ok) throw new Error(`AI 归组失败: ${res.status}`);
-      const data: TabGroupResponse = await res.json();
-      setGroups(data.groups);
-      setExpandedGroups(new Set(data.groups.map((_, i) => i)));
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {
@@ -301,6 +365,35 @@ export default function TabsPage() {
     }
   }, []);
 
+  /** AI 智能分组：调用后端 AI 对当前标签重新归组 */
+  const handleAIGroup = useCallback(async () => {
+    if (tabs.length === 0) return;
+    setLoading(true);
+    setError('');
+    try {
+      if (tabs.length <= 1) {
+        setGroups([{ name: '全部标签', tab_indices: tabs.map((_, i) => i) }]);
+        setExpandedGroups(new Set([0]));
+        return;
+      }
+      const res = await fetch(`${API_BASE}/api/tabs/group`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tabs: tabs.map((t) => ({ url: t.url, title: t.title })),
+        }),
+      });
+      if (!res.ok) throw new Error(`AI 归组失败: ${res.status}`);
+      const data: TabGroupResponse = await res.json();
+      setGroups(data.groups);
+      setExpandedGroups(new Set(data.groups.map((_, i) => i)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AI 分组失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [tabs]);
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -308,13 +401,13 @@ export default function TabsPage() {
       if (!mounted) return;
       setBridgeAvailable(available);
       if (available) {
-        loadAndGroupTabs();
+        loadTabs();
       }
     })();
     return () => {
       mounted = false;
     };
-  }, [loadAndGroupTabs]);
+  }, [loadTabs]);
 
   const handleCloseTab = async (tabId: number) => {
     try {
@@ -374,8 +467,13 @@ export default function TabsPage() {
 
   /** 一键整理：使用当前（编辑后）最新的 groups 应用为 Chrome 原生标签群组 */
   const handleOrganizeTabs = async () => {
-    // 编辑模式下点整理：先退出编辑模式，再执行整理
-    if (editMode) setEditMode(false);
+    // 编辑模式下：过滤空组 + 清理编辑状态 + 退出编辑
+    if (editMode) {
+      setGroups((prev) => prev.filter((g) => g.tab_indices.length > 0));
+      setEditingGroupIdx(null);
+      setEditingGroupName('');
+      setEditMode(false);
+    }
     setOrganizing(true);
     setError('');
     try {
@@ -449,63 +547,213 @@ export default function TabsPage() {
     });
   }
 
-  // ---------- 实时同步：单标签分组 ----------
+  // ---------- 实时同步：新标签 / 换群组 / 群组事件 ----------
 
-  function buildExistingGroups() {
-    return groupsRef.current.map((g) => ({
-      name: g.name,
-      count: g.tab_indices.length,
-      sample_tabs: g.tab_indices
-        .slice(0, 1)
-        .map((i) => tabsRef.current[i])
-        .filter(Boolean)
-        .map((t) => ({ url: t.url || '', title: t.title || '' })),
-    }));
-  }
-
-  async function assignNewTab(tab: ChromeTabInfo, newTabIndex: number) {
-    const existingGroups = buildExistingGroups();
-    let groupName = '新标签';
-    let isCreate = true;
-
-    try {
-      const res = await fetch(`${API_BASE}/api/tabs/assign`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tab: { url: tab.url, title: tab.title || '' },
-          existing_groups: existingGroups,
-        }),
-      });
-      if (res.ok) {
-        const data: TabAssignResponse = await res.json();
-        groupName = data.group_name;
-        isCreate = data.action === 'create';
-      }
-    } catch {
-      // 降级：创建新组
-    }
+  /**
+   * 根据 tab.groupId 决定插入到哪个分组：
+   * - 有 Chrome 群组（groupId !== -1）且缓存中有该群组 → 加入对应分组（不存在则创建）
+   * - 无群组或缓存未命中 → 加入「未分组」（不存在则末尾创建）
+   * 编辑模式下始终加入「未分组」，保护用户的手动分组编辑。
+   */
+  function addTabToState(tab: ChromeTabInfo, tabIndex: number) {
+    const inEditMode = editModeRef.current;
+    const gid = tab.groupId;
+    const hasGroup = !inEditMode && gid != null && gid !== -1;
+    const info = hasGroup
+      ? chromeGroupsRef.current.get(gid as number)
+      : undefined;
+    const targetName = hasGroup ? info?.name || '未命名分组' : '未分组';
+    const targetColor = hasGroup ? info?.color : undefined;
 
     setGroups((prevGroups) => {
-      if (!isCreate) {
-        return prevGroups.map((g) =>
-          g.name === groupName && !g.tab_indices.includes(newTabIndex)
-            ? { ...g, tab_indices: [...g.tab_indices, newTabIndex] }
+      // 已存在同名分组 → 加入
+      const existingIdx = prevGroups.findIndex((g) => g.name === targetName);
+      if (existingIdx !== -1) {
+        return prevGroups.map((g, i) =>
+          i === existingIdx && !g.tab_indices.includes(tabIndex)
+            ? { ...g, tab_indices: [...g.tab_indices, tabIndex] }
             : g
         );
       }
-      const exists = prevGroups.some((g) => g.name === groupName);
-      if (exists) {
-        return prevGroups.map((g) =>
-          g.name === groupName && !g.tab_indices.includes(newTabIndex)
-            ? { ...g, tab_indices: [...g.tab_indices, newTabIndex] }
-            : g
-        );
+      // 不存在 → 创建新分组。「未分组」始终放末尾；具名分组插入到「未分组」之前
+      const newGroup: TabGroup = { name: targetName, tab_indices: [tabIndex] };
+      if (targetColor) newGroup.color = targetColor;
+
+      const ungroupedIdx = prevGroups.findIndex((g) => g.name === '未分组');
+      if (ungroupedIdx === -1 || targetName === '未分组') {
+        // 末尾追加
+        const updated = [...prevGroups, newGroup];
+        setExpandedGroups((prev) => new Set([...prev, updated.length - 1]));
+        return updated;
       }
-      const updated = [...prevGroups, { name: groupName, tab_indices: [newTabIndex] }];
-      setExpandedGroups((prev) => new Set([...prev, updated.length - 1]));
+      // 插入到「未分组」之前，并调整 expandedGroups 中的索引
+      const updated = [...prevGroups];
+      updated.splice(ungroupedIdx, 0, newGroup);
+      setExpandedGroups((prev) => {
+        const next = new Set<number>();
+        for (const i of prev) {
+          if (i < ungroupedIdx) next.add(i);
+          else next.add(i + 1);
+        }
+        next.add(ungroupedIdx);
+        return next;
+      });
       return updated;
     });
+  }
+
+  /**
+   * 处理 'grouped' 事件：tab 在浏览器中换群组。
+   * 非编辑模式下：从原分组移除 → 加入新 groupId 对应分组（或「未分组」）。
+   * 编辑模式下：忽略（保护用户编辑）。
+   */
+  function handleTabGrouped(tab: ChromeTabInfo) {
+    if (editModeRef.current) return; // 编辑模式忽略群组级事件
+
+    const tabIndex = tabsRef.current.findIndex((t) => t.id === tab.id);
+    if (tabIndex === -1) return;
+
+    // 同步 tab 的 groupId 到 state
+    setTabs((prev) =>
+      prev.map((t) => (t.id === tab.id ? { ...t, groupId: tab.groupId } : t))
+    );
+
+    const gid = tab.groupId;
+    const hasGroup = gid != null && gid !== -1;
+    const info = hasGroup
+      ? chromeGroupsRef.current.get(gid as number)
+      : undefined;
+    const targetName = hasGroup ? info?.name || '未命名分组' : '未分组';
+    const targetColor = hasGroup ? info?.color : undefined;
+
+    setGroups((prevGroups) => {
+      // 找到 tab 当前所在分组
+      const srcGi = prevGroups.findIndex((g) =>
+        g.tab_indices.includes(tabIndex)
+      );
+      if (srcGi === -1) return prevGroups;
+      // 已在目标分组 → 无需操作
+      if (prevGroups[srcGi].name === targetName) return prevGroups;
+
+      // 1. 从所有分组中移除该 tab index
+      const withoutTab = prevGroups.map((g) => ({
+        ...g,
+        tab_indices: g.tab_indices.filter((ti) => ti !== tabIndex),
+      }));
+
+      // 2. 加入目标分组（已有则追加，无则新建）
+      const targetExistingIdx = withoutTab.findIndex(
+        (g) => g.name === targetName
+      );
+      let nextGroups: TabGroup[];
+      if (targetExistingIdx !== -1) {
+        nextGroups = withoutTab.map((g, i) =>
+          i === targetExistingIdx
+            ? { ...g, tab_indices: [...g.tab_indices, tabIndex] }
+            : g
+        );
+      } else {
+        const newGroup: TabGroup = {
+          name: targetName,
+          tab_indices: [tabIndex],
+        };
+        if (targetColor) newGroup.color = targetColor;
+        const ungroupedIdx = withoutTab.findIndex((g) => g.name === '未分组');
+        if (ungroupedIdx === -1 || targetName === '未分组') {
+          nextGroups = [...withoutTab, newGroup];
+        } else {
+          nextGroups = [...withoutTab];
+          nextGroups.splice(ungroupedIdx, 0, newGroup);
+        }
+        setExpandedGroups((prev) => {
+          const newIdx =
+            targetName === '未分组'
+              ? nextGroups.length - 1
+              : withoutTab.findIndex((g) => g.name === '未分组');
+          return new Set([...prev, newIdx >= 0 ? newIdx : nextGroups.length - 1]);
+        });
+      }
+
+      // 3. 过滤掉变空的分组（Chrome 解散空群组，state 同步）
+      return nextGroups.filter((g) => g.tab_indices.length > 0);
+    });
+  }
+
+  /**
+   * 处理 Chrome 原生群组事件：
+   * - created → 更新缓存（tabs 会通过自己的事件到达）
+   * - updated → 更新缓存 + 改名/改色
+   * - removed → 删除缓存 + 把该组所有 tab 移入「未分组」
+   * 编辑模式下：全部忽略。
+   */
+  function handleGroupEvent(data: GroupEventData) {
+    if (editModeRef.current) return; // 编辑模式忽略群组级事件
+
+    const { event, group } = data;
+    const groupName = group.title || '未命名分组';
+    const groupColor = CHROME_COLOR_MAP[group.color] || GROUP_COLORS[0];
+
+    if (event === 'created') {
+      chromeGroupsRef.current.set(group.id, {
+        name: groupName,
+        color: groupColor,
+      });
+      return;
+    }
+
+    if (event === 'updated') {
+      const oldInfo = chromeGroupsRef.current.get(group.id);
+      const oldName = oldInfo?.name;
+      chromeGroupsRef.current.set(group.id, {
+        name: groupName,
+        color: groupColor,
+      });
+      if (!oldName || oldName === groupName) return;
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.name === oldName ? { ...g, name: groupName, color: groupColor } : g
+        )
+      );
+      return;
+    }
+
+    if (event === 'removed') {
+      chromeGroupsRef.current.delete(group.id);
+      setGroups((prev) => {
+        const targetGroup = prev.find((g) => g.name === groupName);
+        if (!targetGroup) return prev; // 该组已不在 state（可能已通过 grouped 事件处理）
+
+        const movingIndices = targetGroup.tab_indices;
+        const withoutGroup = prev.filter((g) => g.name !== groupName);
+
+        const ungroupedIdx = withoutGroup.findIndex((g) => g.name === '未分组');
+        if (ungroupedIdx !== -1) {
+          return withoutGroup.map((g, i) =>
+            i === ungroupedIdx
+              ? {
+                  ...g,
+                  tab_indices: [...g.tab_indices, ...movingIndices],
+                }
+              : g
+          );
+        }
+        // 不存在「未分组」→ 末尾创建
+        const updated = [
+          ...withoutGroup,
+          { name: '未分组', tab_indices: movingIndices },
+        ];
+        setExpandedGroups((prevExp) =>
+          new Set([...prevExp, updated.length - 1])
+        );
+        return updated;
+      });
+      // 同步这些 tab 的 groupId 为 -1（ungrouped）
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.groupId === group.id ? { ...t, groupId: -1 } : t
+        )
+      );
+    }
   }
 
   useEffect(() => {
@@ -519,12 +767,18 @@ export default function TabsPage() {
         return;
       }
 
+      // 'grouped' 事件：tab 换群组（编辑模式由 handleTabGrouped 内部忽略）
+      if (event === 'grouped') {
+        handleTabGrouped(tab);
+        return;
+      }
+
       if (event === 'created') {
         if (!isHttpTab(tab.url)) return;
         if (tabsRef.current.some((t) => t.id === tab.id)) return;
         const newTabIndex = tabsRef.current.length;
         setTabs((prev) => [...prev, tab]);
-        assignNewTab(tab, newTabIndex);
+        addTabToState(tab, newTabIndex);
         return;
       }
 
@@ -537,31 +791,24 @@ export default function TabsPage() {
           if (httpNow && !tabsRef.current.some((t) => t.id === tab.id)) {
             const newTabIndex = tabsRef.current.length;
             setTabs((prev) => [...prev, tab]);
-            assignNewTab(tab, newTabIndex);
+            addTabToState(tab, newTabIndex);
           }
           return;
         }
-
-        const oldTab = tabsRef.current[existingIndex];
-        const urlChanged = !!changeInfo.url && changeInfo.url !== oldTab.url;
 
         if (!httpNow) {
           removeTabFromState(tab.id);
           return;
         }
 
-        if (urlChanged) {
-          setGroups((prevGroups) =>
-            prevGroups
-              .map((g) => ({
-                ...g,
-                tab_indices: g.tab_indices.filter((ti) => ti !== existingIndex),
-              }))
-              .filter((g) => g.tab_indices.length > 0)
-          );
-          setTabs((prev) => prev.map((t) => (t.id === tab.id ? tab : t)));
-          assignNewTab(tab, existingIndex);
-        } else if (changeInfo.title || changeInfo.favIconUrl) {
+        // 无论 URL/标题/favicon/groupId 变更，仅原地更新 tab 信息，不改变分组归属。
+        // 分组变更由独立的 'grouped' 事件处理。
+        if (
+          changeInfo.url ||
+          changeInfo.title ||
+          changeInfo.favIconUrl ||
+          changeInfo.groupId !== undefined
+        ) {
           setTabs((prev) => prev.map((t) => (t.id === tab.id ? tab : t)));
         }
       }
@@ -569,34 +816,26 @@ export default function TabsPage() {
     return unsubscribe;
   }, []);
 
-  // ---------- 编辑模式：进入 / 取消 / 完成 ----------
+  useEffect(() => {
+    const unsubscribe = onGroupEvent((data) => {
+      if (!loadedRef.current) return;
+      handleGroupEvent(data);
+    });
+    return unsubscribe;
+  }, []);
+
+  // ---------- 编辑模式：进入 / 取消 ----------
 
   function enterEditMode() {
-    setEditSnapshot({
-      groups: groups.map((g) => ({ ...g, tab_indices: [...g.tab_indices] })),
-      expanded: new Set(expandedGroups),
-    });
     setEditMode(true);
   }
 
   function cancelEditMode() {
-    if (editSnapshot) {
-      setGroups(editSnapshot.groups);
-      setExpandedGroups(editSnapshot.expanded);
-    }
-    setEditSnapshot(null);
+    // 取消编辑 = 回归真实：重新拉取浏览器最新状态，用户本次所有编辑丢弃
     setEditingGroupIdx(null);
     setEditingGroupName('');
     setEditMode(false);
-  }
-
-  function saveEditMode() {
-    // 自动删除空组
-    setGroups((prev) => prev.filter((g) => g.tab_indices.length > 0));
-    setEditSnapshot(null);
-    setEditingGroupIdx(null);
-    setEditingGroupName('');
-    setEditMode(false);
+    loadTabs();
   }
 
   const toggleGroup = (gi: number) => {
@@ -808,48 +1047,39 @@ export default function TabsPage() {
           {editMode ? (
             <>
               <button
+                onClick={handleAIGroup}
+                disabled={loading}
+                className="button button-outline"
+                title="调用 AI 对当前标签重新智能分组"
+              >
+                {loading ? 'AI 分组中...' : '🤖 AI智能分组'}
+              </button>
+              <button
                 onClick={cancelEditMode}
                 disabled={loading}
                 className="button button-outline"
-                title="清除本次所有编辑操作，退出编辑"
+                title="恢复编辑前的分组，退出编辑"
               >
                 ✕ 取消编辑
-              </button>
-              <button
-                onClick={saveEditMode}
-                disabled={loading}
-                className="button button-primary"
-                title="保存本次所有编辑操作，退出编辑"
-              >
-                ✓ 完成编辑
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={enterEditMode}
-                disabled={loading}
-                className="button button-outline"
-                title="编辑：调整分组顺序和改名"
-              >
-                ✏️ 编辑
               </button>
               <button
                 onClick={handleOrganizeTabs}
                 disabled={organizing || loading || groups.length === 0}
                 className="button button-primary"
-                title="按当前分组结果创建 Chrome 标签群组"
+                title="同步当前分组到 Chrome 浏览器，并退出编辑"
               >
-                {organizing ? '整理中...' : '✨ 一键整理'}
-              </button>
-              <button
-                onClick={loadAndGroupTabs}
-                disabled={loading}
-                className="button button-outline"
-              >
-                {loading ? '归组中...' : '🔄 重新归组'}
+                {organizing ? '同步中...' : '✨ 一键同步'}
               </button>
             </>
+          ) : (
+            <button
+              onClick={enterEditMode}
+              disabled={loading}
+              className="button button-outline"
+              title="编辑：调整分组、AI 分组、同步到浏览器"
+            >
+              ✏️ 编辑
+            </button>
           )}
         </div>
       </div>
@@ -872,7 +1102,7 @@ export default function TabsPage() {
       {loading && (
         <div className="text-center py-12 text-muted-foreground">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-3"></div>
-          <p>AI 正在归组标签页...</p>
+          <p>正在加载标签页...</p>
         </div>
       )}
 
@@ -902,7 +1132,7 @@ export default function TabsPage() {
             {groups.map((group, gi) => {
               const expanded = expandedGroups.has(gi);
               const isEditingName = editingGroupIdx === gi;
-              const groupColor = GROUP_COLORS[gi % GROUP_COLORS.length];
+              const groupColor = group.color || GROUP_COLORS[gi % GROUP_COLORS.length];
               return (
                 <div
                   key={gi}
