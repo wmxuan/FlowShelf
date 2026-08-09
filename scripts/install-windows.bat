@@ -8,7 +8,7 @@ setlocal enabledelayedexpansion
 set HOST_NAME=com.flowshelf.backend
 set SCRIPT_DIR=%~dp0
 set BACKEND_BIN=%SCRIPT_DIR%flowshelf-backend.exe
-set EXTENSION_ID=3aa3451962e4f139333083bbca7fd03d
+set EXTENSION_ID=dkkdefbjgcoepbdjdddaidllmkhpnadn
 
 echo ========================================
 echo   FlowShelf Windows Install

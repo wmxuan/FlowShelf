@@ -8,9 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST_NAME="com.flowshelf.backend"
 BACKEND_BIN="$SCRIPT_DIR/flowshelf-backend"
 
-# TODO: 替换为实际的扩展 ID（由 manifest.json 中的 key 决定）
-# 当前 key 对应的扩展 ID 为 3aa3451962e4f139333083bbca7fd03d
-EXTENSION_ID="3aa3451962e4f139333083bbca7fd03d"
+# 由 manifest.json 中的 key 决定的扩展 ID
+EXTENSION_ID="dkkdefbjgcoepbdjdddaidllmkhpnadn"
 
 echo "🔧 FlowShelf Linux 安装"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -68,18 +68,19 @@ jobs:
           name: extension-dist
           path: flowshelf-extension/dist/
 
-  # ── 3. 构建后端二进制（跨平台） ──────────────────────────
+  # ── 3. 构建后端二进制 ──────────────────────────
   build-backend:
     needs: build-frontend
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
             platform: macos
+            python-arch: "x64"
           - os: windows-latest
             platform: windows
-          - os: ubuntu-latest
-            platform: linux
+            python-arch: ""
     runs-on: ${{ matrix.os }}
     steps:
       - name: ⬇️ Checkout
@@ -95,6 +96,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          architecture: "${{ matrix.python-arch }}"
 
       - name: 🗜️ UPX Cache
         id: upx-cache
@@ -106,29 +108,21 @@ jobs:
             ./upx-*
           key: upx-${{ matrix.platform }}-${{ env.UPX_VERSION || '5.1.0' }}
 
-      - name: 🗜️ Install UPX (cross-platform)
+      - name: 🗜️ Install UPX
         run: |
           set -e
-          UPX_VERSION="${UPX_VERSION:-5.1.0}"
-          mkdir -p ~/.cache/upx
           if [ "${{ matrix.platform }}" = "windows" ]; then
+            UPX_VERSION="${UPX_VERSION:-5.1.0}"
+            mkdir -p ~/.cache/upx
             if [ ! -f ~/.cache/upx/upx-${UPX_VERSION}-win64/upx.exe ]; then
               curl -L -o upx.zip "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-win64.zip"
               unzip -o upx.zip -d ~/.cache/upx/
             fi
             export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-win64:$PATH"
           elif [ "${{ matrix.platform }}" = "macos" ]; then
-            # macos 用 homebrew 装 UPX，GitHub Actions runner 默认已有 brew
             if ! command -v upx >/dev/null 2>&1; then
               brew install upx >/dev/null 2>&1 || echo "UPX brew install skipped"
             fi
-          else
-            # Linux: 下载官方二进制
-            if [ ! -d ~/.cache/upx/upx-${UPX_VERSION}-amd64_linux ]; then
-              curl -L -o upx.tar.xz "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/upx-${UPX_VERSION}-amd64_linux.tar.xz"
-              tar -xf upx.tar.xz -C ~/.cache/upx/
-            fi
-            export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-amd64_linux:$PATH"
           fi
           echo "=== UPX version ==="
           command -v upx && upx --version || echo "UPX 不可用，跳过压缩"
@@ -151,15 +145,12 @@ jobs:
         run: |
           cd backend
           source .venv/bin/activate 2>/dev/null || .venv\Scripts\activate.bat 2>/dev/null || true
-          # Windows 下把 UPX 路径加入 PATH
           if [ "${{ matrix.platform }}" = "windows" ]; then
             UPX_VERSION="${UPX_VERSION:-5.1.0}"
             export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-win64:$PATH"
-          elif [ "${{ matrix.platform }}" = "linux" ]; then
-            UPX_VERSION="${UPX_VERSION:-5.1.0}"
-            export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-amd64_linux:$PATH"
           fi
           echo "=== PyInstaller start ==="
+          echo "Python arch: $(python -c 'import struct; print(struct.calcsize(\"P\")*8)-bit)')"
           pyinstaller --clean flowshelf.spec
           echo "=== Build output ==="
           ls -lah dist/ || ls -lah backend/dist/ || true
@@ -206,9 +197,6 @@ jobs:
           - platform: windows
             ext: ".exe"
             script: "install-windows.bat"
-          - platform: linux
-            ext: ""
-            script: "install-linux.sh"
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -238,7 +226,7 @@ jobs:
           ===================
 
           1. 运行安装脚本：
-             - macOS/Linux: ./install-macos.sh 或 ./install-linux.sh
+             - macOS: ./install-macos.sh
              - Windows: 双击 install-windows.bat
 
           2. 打开 Chrome 浏览器 → chrome://extensions
@@ -326,12 +314,11 @@ jobs:
             ### 下载
             | 平台 | 文件 |
             |------|------|
-            | macOS | `flowshelf-macos.zip` |
+            | macOS (Intel) | `flowshelf-macos.zip` |
             | Windows | `flowshelf-windows.zip` |
-            | Linux | `flowshelf-linux.zip` |
 
             ### 安装步骤
             1. 解压对应平台的 zip 文件
-            2. 运行安装脚本（macOS/Linux: `./install-macos.sh`，Windows: `install-windows.bat`）
+            2. 运行安装脚本（macOS: `./install-macos.sh`，Windows: `install-windows.bat`）
             3. 在 Chrome 中加载 `flowshelf-extension` 目录（开发者模式）
             4. 扩展加载后，后端自动启动 🎉

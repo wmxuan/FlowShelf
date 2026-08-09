@@ -10,9 +10,8 @@ MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHos
 MANIFEST_FILE="$MANIFEST_DIR/$HOST_NAME.json"
 BACKEND_BIN="$SCRIPT_DIR/flowshelf-backend"
 
-# TODO: 替换为实际的扩展 ID（由 manifest.json 中的 key 决定）
-# 当前 key 对应的扩展 ID 为 3aa3451962e4f139333083bbca7fd03d
-EXTENSION_ID="3aa3451962e4f139333083bbca7fd03d"
+# 由 manifest.json 中的 key 决定的扩展 ID
+EXTENSION_ID="dkkdefbjgcoepbdjdddaidllmkhpnadn"
 
 echo "🔧 FlowShelf macOS 安装"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
