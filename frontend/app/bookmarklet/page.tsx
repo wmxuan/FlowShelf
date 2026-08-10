@@ -33,7 +33,7 @@ export default function BookmarkletPage() {
       window.removeEventListener('message', handleMessage);
       clearTimeout(timer);
       learningApi
-        .create(url, '', 'unspecified', content)
+        .create({ source_url: url, title: '', item_type: 'unspecified', content })
         .then((result) => {
           setItem(result);
           setStatus('success');

@@ -303,3 +303,73 @@ class LearningItemUpdateRequest(BaseModel):
     key_points: Optional[List[str]] = None
     ai_tags: Optional[List[str]] = None
     tool_description: Optional[str] = None
+
+
+# ============ Tab 管理相关 ============
+
+
+class TabInfoInput(BaseModel):
+    """单个标签页信息"""
+
+    url: str
+    title: str = ""
+    favIconUrl: Optional[str] = None
+
+
+class TabGroupRequest(BaseModel):
+    """Tab 归组请求"""
+
+    tabs: List[TabInfoInput]
+
+
+class TabGroupResponse(BaseModel):
+    """Tab 归组响应"""
+
+    groups: list[dict]
+    total: int
+    group_count: int
+
+
+class GroupContextInput(BaseModel):
+    """已有分组上下文（用于单标签分组）"""
+
+    name: str
+    count: int = 0
+    sample_tabs: List[TabInfoInput] = []
+
+
+class TabAssignRequest(BaseModel):
+    """单标签分组请求"""
+
+    tab: TabInfoInput
+    existing_groups: List[GroupContextInput] = []
+
+
+class TabAssignResponse(BaseModel):
+    """单标签分组响应"""
+
+    action: str  # "assign" | "create"
+    group_name: str
+
+
+# ============ 系统相关 ============
+
+
+class HealthResponse(BaseModel):
+    """健康检查响应"""
+
+    status: str
+    app: str
+    version: str
+    demo_mode: bool
+    has_api_key: bool
+    ai_mode: str
+    has_embedding: bool
+
+
+class SettingsUpdateResponse(BaseModel):
+    """AI 配置更新响应"""
+
+    ok: bool = True
+    has_api_key: bool
+    ai_mode: str

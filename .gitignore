@@ -73,3 +73,6 @@ temp/
 
 # ---------- Alembic ----------
 backend/alembic/versions/*.pyc
+
+
+.trae/*

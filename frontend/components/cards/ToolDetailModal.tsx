@@ -87,7 +87,7 @@ export default function ToolDetailModal({
       if (data.source === 'toolbox') {
         const updated = await toolsApi.update(data.id, {
           title: title.trim(),
-          description: description.trim() || null,
+          description: description.trim() || undefined,
         });
         onUpdated({
           id: updated.id,

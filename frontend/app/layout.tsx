@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import Header from '@/components/Header';
+import Providers from '@/components/Providers';
 
 export const metadata: Metadata = {
   title: 'FlowShelf - AI 数字信息管家',
@@ -15,6 +16,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50">
+        <Providers>
         <div className="flex min-h-screen flex-col">
           <Header />
 
@@ -32,6 +34,7 @@ export default function RootLayout({
             </div>
           </footer>
         </div>
+        </Providers>
       </body>
     </html>
   );

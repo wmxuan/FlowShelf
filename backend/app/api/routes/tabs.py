@@ -6,81 +6,29 @@ Tab 管理 API 路由
 """
 
 from app.core.logging import get_logger
-from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter
 
-from app.core.config import get_settings
-from app.providers.base import get_ai_provider
+from app.api.deps import AIProvider
+from app.db.schemas.schemas import (
+    TabGroupRequest,
+    TabGroupResponse,
+    TabAssignRequest,
+    TabAssignResponse,
+)
 
 log = get_logger(__name__)
 
 router = APIRouter(prefix="/api/tabs", tags=["tabs"])
 
 
-class TabInfoInput(BaseModel):
-    """单个标签页信息"""
-
-    url: str
-    title: str = ""
-    favIconUrl: Optional[str] = None
-
-
-class TabGroupRequest(BaseModel):
-    """Tab 归组请求"""
-
-    tabs: List[TabInfoInput]
-
-
-class TabGroupResponse(BaseModel):
-    """Tab 归组响应"""
-
-    groups: list[dict]
-    total: int
-    group_count: int
-
-
-class GroupContextInput(BaseModel):
-    """已有分组上下文（用于单标签分组）"""
-
-    name: str
-    count: int = 0
-    sample_tabs: List[TabInfoInput] = []
-
-
-class TabAssignRequest(BaseModel):
-    """单标签分组请求"""
-
-    tab: TabInfoInput
-    existing_groups: List[GroupContextInput] = []
-
-
-class TabAssignResponse(BaseModel):
-    """单标签分组响应"""
-
-    action: str  # "assign" | "create"
-    group_name: str
-
-
 @router.post("/group", response_model=TabGroupResponse)
-async def group_tabs(request: TabGroupRequest):
+async def group_tabs(request: TabGroupRequest, ai_provider: AIProvider):
     """
     AI Tab 归组：将多个标签页按主题相似度聚类分组。
 
     DEMO_MODE 下按域名简单分组；真实模式由 LLM 进行语义聚类。
     """
-    settings = get_settings()
-    ai_provider = get_ai_provider(
-        demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL,
-        model=settings.AI_MODEL,
-        embedding_model=settings.EMBEDDING_MODEL,
-        max_tokens=settings.AI_MAX_TOKENS,
-        temperature=settings.AI_TEMPERATURE,
-    )
-
     tabs_data = [t.model_dump() for t in request.tabs]
     total = len(tabs_data)
 
@@ -102,24 +50,13 @@ async def group_tabs(request: TabGroupRequest):
 
 
 @router.post("/assign", response_model=TabAssignResponse)
-async def assign_tab(request: TabAssignRequest):
+async def assign_tab(request: TabAssignRequest, ai_provider: AIProvider):
     """
     AI 单标签分组：将一个新标签页分配到已有分组或创建新分组。
 
     仅传入新标签 + 已有分组名称（而非全部标签），大幅减少 token 消耗。
     适用于标签实时同步场景（新增标签 / URL 变化）。
     """
-    settings = get_settings()
-    ai_provider = get_ai_provider(
-        demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL,
-        model=settings.AI_MODEL,
-        embedding_model=settings.EMBEDDING_MODEL,
-        max_tokens=settings.AI_MAX_TOKENS,
-        temperature=settings.AI_TEMPERATURE,
-    )
-
     tab_data = request.tab.model_dump()
     groups_data = [
         {

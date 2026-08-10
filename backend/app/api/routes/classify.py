@@ -7,13 +7,10 @@
 
 from app.core.logging import get_logger
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter
 
-from app.core.config import get_settings
-from app.core.database import get_db
+from app.api.deps import DBSession, AIProvider
 from app.db.schemas.schemas import ClassifyRequest, ClassifyResponse
-from app.providers.base import get_ai_provider
 from app.services.tag_service import get_candidate_tags, normalize_tags
 from app.tools.content_extractor import content_extractor
 
@@ -25,24 +22,14 @@ router = APIRouter(prefix="/api/classify", tags=["classify"])
 @router.post("", response_model=ClassifyResponse)
 async def classify_url(
     request: ClassifyRequest,
-    db: AsyncSession = Depends(get_db),
+    db: DBSession,
+    ai_provider: AIProvider,
 ):
     """
     智能分流：分析 URL 页面内容，返回类型（article/tool/video）+ 标签。
 
     抓取失败时降级为 article，不阻断收藏流程。
     """
-    settings = get_settings()
-    ai_provider = get_ai_provider(
-        demo_mode=settings.DEMO_MODE,
-        api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL,
-        model=settings.AI_MODEL,
-        embedding_model=settings.EMBEDDING_MODEL,
-        max_tokens=settings.AI_MAX_TOKENS,
-        temperature=settings.AI_TEMPERATURE,
-    )
-
     # Step 1: 抓取页面正文（失败降级为空正文，不阻断分类）
     # 扩展端可传入预先提取的正文（document.body.innerText），跳过后端抓取，
     # 规避反爬 / 重定向循环（TooManyRedirects 等）。

@@ -87,7 +87,7 @@ const CARD_CONFIG: AddItemKindConfig = {
   ],
   generateApi: async (url) => {
     const r = await cardsApi.generate(url);
-    return r as Record<string, unknown>;
+    return r as unknown as Record<string, unknown>;
   },
   saveApi: async (url, editFields, tags, preview) => {
     const keyPoints = editFields.key_points
@@ -125,7 +125,7 @@ const TOOL_CONFIG: AddItemKindConfig = {
   ],
   generateApi: async (url) => {
     const r = await toolsApi.generate(url);
-    return r as Record<string, unknown>;
+    return r as unknown as Record<string, unknown>;
   },
   saveApi: async (url, editFields, tags, _preview) => {
     await toolsApi.create(url, editFields.title.trim() || url, editFields.description.trim() || undefined, tags);
