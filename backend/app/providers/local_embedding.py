@@ -34,22 +34,46 @@ def _get_model_cache_dir() -> Path:
 
 
 def _is_sentence_transformers_available() -> bool:
-    """检测 sentence-transformers 是否安装"""
+    """检测 sentence-transformers 是否安装且可正常导入
+
+    捕获所有异常（不仅是 ImportError），因为依赖版本不兼容时
+    sentence_transformers 的 import 也可能抛 NameError/AttributeError 等。
+    """
     try:
         import sentence_transformers  # noqa: F401
 
         return True
-    except ImportError:
+    except Exception:
         return False
 
 
 def _auto_install_sentence_transformers() -> bool:
     """自动安装 sentence-transformers（含 torch 最小依赖）
 
-    返回 True 表示安装成功，False 表示失败。
+    仅在开发环境（有 pip 且非 PyInstaller 打包）中尝试。
+    打包环境中跳过，避免阻塞请求或因无 pip 而报错。
+
+    返回 True 表示安装成功，False 表示失败/跳过。
     """
     import subprocess
     import sys
+
+    # PyInstaller 打包环境中 sys.frozen 存在，不尝试自动安装
+    if getattr(sys, "frozen", False):
+        logger.info("打包环境，跳过 sentence-transformers 自动安装")
+        return False
+
+    # 检查 pip 是否可用
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "--version"],
+            timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        logger.info("pip 不可用，跳过 sentence-transformers 自动安装")
+        return False
 
     logger.info("检测到 sentence-transformers 未安装，尝试自动安装...")
     try:
@@ -183,7 +207,7 @@ def get_local_embedding_provider(
 ) -> Optional[LocalEmbeddingProvider]:
     """获取本地 Embedding Provider 单例
 
-    - sentence-transformers 未安装 → 尝试自动安装，失败则返回 None
+    - sentence-transformers 未安装或版本不兼容 → 尝试自动安装，失败则返回 None
     - 正常情况 → 返回单例 Provider
 
     Args:
@@ -193,13 +217,17 @@ def get_local_embedding_provider(
         # 尝试自动安装 sentence-transformers
         if not _auto_install_sentence_transformers():
             logger.warning(
-                "sentence-transformers 安装失败，本地 Embedding 不可用。"
-                "搜索将降级为关键词匹配。"
-                "如需本地嵌入，请手动执行: pip install sentence-transformers>=3.0.0"
+                "sentence-transformers 不可用，本地 Embedding 降级。"
+                "搜索将使用关键词匹配，AI 分组/摘要不受影响。"
             )
             return None
-        # 安装成功，清除 lru_cache 使下次 import 生效
-        _get_local_embedding_provider.cache_clear()
+        # 安装后重新检测
+        if not _is_sentence_transformers_available():
+            logger.warning(
+                "sentence-transformers 安装后仍无法导入（可能依赖版本冲突），"
+                "本地 Embedding 不可用。"
+            )
+            return None
 
     if model_name is None:
         from app.core.config import get_settings
@@ -214,4 +242,8 @@ def get_local_embedding_provider(
             _get_model_cache_dir(),
         )
 
-    return _get_local_embedding_provider(model_name)
+    try:
+        return _get_local_embedding_provider(model_name)
+    except Exception as exc:
+        logger.warning("LocalEmbeddingProvider 创建失败: %s", exc)
+        return None

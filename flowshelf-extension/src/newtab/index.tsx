@@ -14,29 +14,57 @@ import "./newtab.css";
 
 const DEFAULT_WEB_BASE = "http://localhost:8972";
 
+/**
+ * 在 8972-8979 端口范围内探测后端，返回可用的 base URL 或 null
+ */
+async function detectBackend(): Promise<string | null> {
+  for (let port = 8972; port <= 8979; port++) {
+    try {
+      const res = await fetch(`http://localhost:${port}/api/health`, {
+        method: "GET",
+        signal: AbortSignal.timeout(1500),
+      });
+      if (res.ok) {
+        return `http://localhost:${port}`;
+      }
+    } catch { /* not running */ }
+  }
+  return null;
+}
+
 export default function NewTabRedirect() {
   const [status, setStatus] = useState<"loading" | "redirecting" | "error">("loading");
   const [webBase, setWebBase] = useState("");
 
   useEffect(() => {
-    chrome.storage.local.get(["flowshelf_web_base"], (result) => {
-      const base = (result.flowshelf_web_base || DEFAULT_WEB_BASE).replace(/\/$/, "");
-      setWebBase(base);
+    (async () => {
+      // 1. 先读缓存地址
+      const { flowshelf_web_base } = await chrome.storage.local.get(["flowshelf_web_base"]);
+      const cached = (flowshelf_web_base as string || DEFAULT_WEB_BASE).replace(/\/$/, "");
 
-      // 先探测后端是否可达，再决定跳转还是提示
-      fetch(`${base}/api/health`, { method: "GET", signal: AbortSignal.timeout(3000) })
-        .then((res) => {
-          if (res.ok) {
-            setStatus("redirecting");
-            window.location.replace(`${base}/tabs`);
-          } else {
-            setStatus("error");
-          }
-        })
-        .catch(() => {
-          setStatus("error");
-        });
-    });
+      // 2. 验证缓存地址是否可用
+      let base: string | null = null;
+      try {
+        const res = await fetch(`${cached}/api/health`, { method: "GET", signal: AbortSignal.timeout(2000) });
+        if (res.ok) base = cached;
+      } catch { /* cached address unreachable */ }
+
+      // 3. 缓存不可用 → 全端口探测
+      if (!base) {
+        base = await detectBackend();
+      }
+
+      if (base) {
+        // 更新缓存，确保后续访问直接命中
+        await chrome.storage.local.set({ flowshelf_web_base: base });
+        setWebBase(base);
+        setStatus("redirecting");
+        window.location.replace(`${base}/tabs`);
+      } else {
+        setWebBase(cached);
+        setStatus("error");
+      }
+    })();
   }, []);
 
   if (status === "redirecting") {
