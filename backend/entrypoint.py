@@ -20,6 +20,7 @@ from pathlib import Path
 
 # ── 端口发现 ──────────────────────────────────────────────
 
+
 def find_available_port(start: int = 8972, end: int = 8999) -> int:
     """从 start 到 end 依次尝试，返回第一个可用端口"""
     for port in range(start, end + 1):
@@ -112,6 +113,7 @@ def stop_server() -> None:
 
 # ── Native Messaging 协议 ──────────────────────────────────
 
+
 def read_native_message() -> dict | None:
     """从 stdin 读取一条 Native Messaging 消息（4 字节长度前缀 + JSON）"""
     raw_length = sys.stdin.buffer.read(4)
@@ -180,8 +182,22 @@ def handle_native_message(message: dict) -> dict:
 
 
 def native_messaging_mode() -> None:
-    """Native Messaging 主循环：持续读取消息直到 stdin 关闭"""
-    # Chrome 启动 Native Messaging host 时，保持 stdin/stdout 打开
+    """Native Messaging 主循环：持续读取消息直到 stdin 关闭
+
+    同时在后台启动服务器（如果尚未运行）。
+    Chrome 启动 Native Messaging host 时，进程必须保持存活并持续读 stdin，
+    否则 Chrome 会报 "A session ended very soon after starting"。
+    """
+    # 先确保服务器在运行（扩展首次加载时会发 start 消息，但也提前启动以防万一）
+    info = read_server_info()
+    if not (info and is_server_running(info.get("port", 0))):
+        try:
+            port = find_available_port()
+            start_server(port)
+        except Exception:
+            pass  # 启动失败不阻断消息循环，扩展会收到 error 响应
+
+    # 消息循环：持续读取直到 stdin 关闭
     while True:
         try:
             message = read_native_message()
@@ -197,10 +213,28 @@ def native_messaging_mode() -> None:
                 break
 
 
+def _is_native_messaging_context() -> bool:
+    """检测当前是否被 Chrome 作为 Native Messaging Host 启动
+
+    判断依据：
+    - 命令行含 --native-messaging 参数
+    - 或 stdin 不是 TTY（Chrome 通过管道连接 stdin/stdout）
+    """
+    if "--native-messaging" in sys.argv:
+        return True
+    # Chrome 启动 native host 时，stdin 是管道而非 TTY
+    try:
+        return not sys.stdin.isatty()
+    except Exception:
+        # 某些环境（如 PyInstaller onefile）isatty() 可能抛异常，保守返回 True
+        return True
+
+
 # ── 主入口 ──────────────────────────────────────────────────
 
+
 def main() -> None:
-    if "--native-messaging" in sys.argv:
+    if _is_native_messaging_context():
         native_messaging_mode()
     else:
         # 直接启动模式：找可用端口，启动服务器

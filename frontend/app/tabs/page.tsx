@@ -74,6 +74,30 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || (
     : ''
 );
 
+/** 版本信息（从 /api/health 获取） */
+interface VersionInfo {
+  version: string;
+  demoMode: boolean;
+  apiBase: string;
+}
+const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
+
+useEffect(() => {
+  (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/health`);
+      if (res.ok) {
+        const data = await res.json();
+        setVersionInfo({
+          version: data.version || '?',
+          demoMode: !!data.demo_mode,
+          apiBase: API_BASE || `${window.location.origin}`,
+        });
+      }
+    } catch { /* ignore */ }
+  })();
+}, []);
+
 /** 分组卡片顶部边条颜色循环（与 background 中 Chrome 群组颜色一致） */
 const GROUP_COLORS = [
   '#3b82f6', // blue
@@ -1231,6 +1255,16 @@ export default function TabsPage() {
               </span>
             )}
           </p>
+          {/* 版本信息条 */}
+          {versionInfo && (
+            <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground/70">
+              <span className="px-1.5 py-0.5 bg-muted rounded font-mono">v{versionInfo.version}</span>
+              <span className={`px-1.5 py-0.5 rounded ${versionInfo.demoMode ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                {versionInfo.demoMode ? 'DEMO 模式' : 'AI 实战模式'}
+              </span>
+              <span className="font-mono">{versionInfo.apiBase}</span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {editMode ? (
