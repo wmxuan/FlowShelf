@@ -10,7 +10,8 @@ export default function HomePage() {
 
   useEffect(() => {
     const host = window.location.hostname;
-    const backendUrl = `http://${host}:8000`;
+    const port = window.location.port || '8972';
+    const backendUrl = `http://${host}:${port}`;
     const href = `javascript:(function(){function s(m,o){var t=document.createElement('div');t.textContent=m;t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:2147483647;padding:12px 20px;border-radius:8px;font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:#fff;background:'+(o?'#10b981':'#dc2626')+';box-shadow:0 4px 12px rgba(0,0,0,.15);max-width:80vw;word-break:break-word;white-space:pre-line;';document.body.appendChild(t);setTimeout(function(){t.remove();},3500);}try{var c=document.body&&document.body.innerText?document.body.innerText.slice(0,50000):'';fetch('${backendUrl}/api/learning',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_url:location.href,title:document.title,item_type:'unspecified',content:c})}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(){s('✅ 已放入待分类暂存区\\n请在 Web 应用中选择归档类型',true);}).catch(function(e){s('❌ 收藏失败：'+e.message,false);});}catch(e){s('❌ 收藏失败：'+e.message,false);}})();`;
     setBookmarkletHref(href);
   }, []);
