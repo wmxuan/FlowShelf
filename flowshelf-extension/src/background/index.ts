@@ -28,7 +28,7 @@ const DEDUP_WINDOW_MS = 3000;
 const recentlySavedLearningUrls = new Map<string, number>();
 const RECENT_SAVED_WINDOW_MS = 60 * 1000;
 
-// 扩展安装/更新时：创建右键菜单 + 启动后端
+// 扩展安装/更新时：创建右键菜单 + 启动后端 + 注册动态 content script
 chrome.runtime.onInstalled.addListener(async () => {
   // 1. 创建右键菜单
   chrome.contextMenus.create({
@@ -39,12 +39,16 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   // 2. 启动后端
   await ensureBackendRunning();
+
+  // 3. 注册动态 content script（匹配后端实际端口）
+  await registerDynamicContentScript();
 });
 
-// 扩展 Service Worker 启动时也确保后端在运行
+// 扩展 Service Worker 启动时也确保后端在运行 + 注册动态 CS
 // （onInstalled 只在安装/更新时触发，Service Worker 重启后需要重新检测）
 chrome.runtime.onStartup.addListener(async () => {
   await ensureBackendRunning();
+  await registerDynamicContentScript();
 });
 
 /**
@@ -66,6 +70,8 @@ async function ensureBackendRunning(): Promise<void> {
         await setApiBase(url);
         await setWebBase(url);
         console.log("[FlowShelf] Backend already running on port", port);
+        // 立即注册动态 content script 以匹配实际端口
+        await registerDynamicContentScript();
         return;
       }
     } catch {
@@ -79,6 +85,7 @@ async function ensureBackendRunning(): Promise<void> {
     await setApiBase(result.url);
     await setWebBase(result.url);
     console.log("[FlowShelf] Backend auto-started via Native Messaging on port", result.port);
+    await registerDynamicContentScript();
     return;
   }
 
@@ -105,6 +112,7 @@ async function tryDetectBackend(): Promise<void> {
         await setApiBase(url);
         await setWebBase(url);
         console.log("[FlowShelf] Detected backend on port", port);
+        await registerDynamicContentScript();
         return;
       }
     } catch {
@@ -112,6 +120,66 @@ async function tryDetectBackend(): Promise<void> {
     }
   }
   console.warn("[FlowShelf] No backend detected, using default");
+}
+
+/**
+ * 动态注册 Content Script，匹配后端实际运行的端口
+ *
+ * manifest.json 的 content_scripts 只能声明固定端口（8972、3000），
+ * 但后端可能因端口占用而启动在 8973+。动态注册弥补这一不足。
+ *
+ * 原理：chrome.scripting.registerContentScripts 可在运行时添加匹配规则，
+ * 比静态声明更灵活，能覆盖 8973-8979 等动态端口。
+ */
+async function registerDynamicContentScript(): Promise<void> {
+  const DYNAMIC_CS_ID = "flowshelf-bridge-dynamic";
+
+  // 获取当前后端实际地址
+  const { flowshelf_web_base } = await chrome.storage.local.get(["flowshelf_web_base"]);
+  const webBase = (flowshelf_web_base as string) || DEFAULT_WEB_BASE;
+
+  // 从 webBase 提取 origin（如 http://localhost:8973）
+  let origin: string;
+  try {
+    origin = new URL(webBase).origin;
+  } catch {
+    origin = DEFAULT_WEB_BASE;
+  }
+
+  // 构建匹配模式：origin + 通配符路径
+  const matchPattern = `${origin}/*`;
+
+  // 检查是否已经注册过（避免重复注册报错）
+  let existingScripts: chrome.scripting.RegisteredContentScript[] = [];
+  try {
+    existingScripts = await chrome.scripting.getRegisteredContentScripts({
+      ids: [DYNAMIC_CS_ID],
+    });
+  } catch { /* API not available in older Chrome */ }
+
+  // 如果已注册且匹配模式相同，跳过
+  if (existingScripts.length > 0 && existingScripts[0].matches?.includes(matchPattern)) {
+    console.log("[FlowShelf] Dynamic content script already registered for", matchPattern);
+    return;
+  }
+
+  // 注册（或更新）动态 content script
+  try {
+    // 先尝试注销旧的
+    try {
+      await chrome.scripting.unregisterContentScripts({ ids: [DYNAMIC_CS_ID] });
+    } catch { /* ignore */ }
+
+    await chrome.scripting.registerContentScripts([{
+      id: DYNAMIC_CS_ID,
+      matches: [matchPattern],
+      js: ["src/content/bridge.ts"],
+      runAt: "document_start",
+    }]);
+    console.log("[FlowShelf] Registered dynamic content script for", matchPattern);
+  } catch (err) {
+    console.warn("[FlowShelf] Failed to register dynamic content script:", err);
+  }
 }
 
 // 右键菜单点击 → 打开弹窗

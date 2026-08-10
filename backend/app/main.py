@@ -81,6 +81,17 @@ def create_app() -> FastAPI:
     async def health_check():
         """健康检查"""
         has_valid_key = _has_valid_api_key(settings)
+        # 检测本地 Embedding 是否可用
+        has_embedding = False
+        try:
+            from app.providers.local_embedding import (
+                _is_sentence_transformers_available,
+                _is_model_downloaded,
+            )
+
+            has_embedding = _is_sentence_transformers_available()
+        except Exception:
+            pass
         return {
             "status": "ok",
             "app": settings.APP_NAME,
@@ -88,6 +99,7 @@ def create_app() -> FastAPI:
             "demo_mode": settings.DEMO_MODE,
             "has_api_key": has_valid_key,
             "ai_mode": "real" if has_valid_key else "demo",
+            "has_embedding": has_embedding,
         }
 
     @app.post("/api/settings/api-key")

@@ -574,7 +574,13 @@ export default function TabsPage() {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const available = await checkBridgeAvailable(2000);
+      // 增加超时到 5 秒，并重试一次（打包后 JS 加载可能较慢）
+      let available = await checkBridgeAvailable(5000);
+      if (!available && mounted) {
+        // 二次重试：等 1 秒后再检测
+        await new Promise(r => setTimeout(r, 1000));
+        available = await checkBridgeAvailable(5000);
+      }
       if (!mounted) return;
       setBridgeAvailable(available);
       if (available) {

@@ -34,13 +34,50 @@ def _get_model_cache_dir() -> Path:
 
 
 def _is_sentence_transformers_available() -> bool:
-    """检测 sentence-transformers 是否安装（发布包默认不装，用户可选安装）"""
+    """检测 sentence-transformers 是否安装"""
     try:
         import sentence_transformers  # noqa: F401
 
         return True
     except ImportError:
         return False
+
+
+def _auto_install_sentence_transformers() -> bool:
+    """自动安装 sentence-transformers（含 torch 最小依赖）
+
+    返回 True 表示安装成功，False 表示失败。
+    """
+    import subprocess
+    import sys
+
+    logger.info("检测到 sentence-transformers 未安装，尝试自动安装...")
+    try:
+        subprocess.check_call(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "sentence-transformers>=3.0.0",
+                "--quiet",
+            ],
+            timeout=300,
+        )
+        logger.info("sentence-transformers 安装成功")
+        return True
+    except Exception as exc:
+        logger.warning("sentence-transformers 自动安装失败: %s", exc)
+        return False
+
+
+def _is_model_downloaded(model_name: str) -> bool:
+    """检测 bge 模型是否已下载到缓存目录"""
+    cache_dir = _get_model_cache_dir()
+    # sentence-transformers 缓存结构：models--speaker--model_name/snapshots/...
+    model_dir_name = model_name.replace("/", "--")
+    model_path = cache_dir / model_dir_name
+    return model_path.exists() and any(model_path.iterdir())
 
 
 class LocalEmbeddingProvider:
@@ -146,22 +183,35 @@ def get_local_embedding_provider(
 ) -> Optional[LocalEmbeddingProvider]:
     """获取本地 Embedding Provider 单例
 
-    - sentence-transformers 未安装 → 返回 None，调用方应降级为 hash/OpenAI 向量
+    - sentence-transformers 未安装 → 尝试自动安装，失败则返回 None
     - 正常情况 → 返回单例 Provider
 
     Args:
         model_name: 模型名，None 时从 settings 读取
     """
     if not _is_sentence_transformers_available():
-        logger.warning(
-            "sentence-transformers 未安装，本地 Embedding 不可用。"
-            "自动降级为 hash 向量（不可用于真实语义检索）或 OpenAI API 向量。"
-            "如需本地嵌入，请执行: pip install sentence-transformers>=3.0.0"
-        )
-        return None
+        # 尝试自动安装 sentence-transformers
+        if not _auto_install_sentence_transformers():
+            logger.warning(
+                "sentence-transformers 安装失败，本地 Embedding 不可用。"
+                "搜索将降级为关键词匹配。"
+                "如需本地嵌入，请手动执行: pip install sentence-transformers>=3.0.0"
+            )
+            return None
+        # 安装成功，清除 lru_cache 使下次 import 生效
+        _get_local_embedding_provider.cache_clear()
 
     if model_name is None:
         from app.core.config import get_settings
 
         model_name = get_settings().EMBEDDING_LOCAL_MODEL
+
+    # 首次使用时预下载模型（模型不存在时 SentenceTransformer 会自动从 HuggingFace 下载）
+    if not _is_model_downloaded(model_name):
+        logger.info(
+            "Embedding 模型 %s 未缓存，首次使用时将自动下载到 %s",
+            model_name,
+            _get_model_cache_dir(),
+        )
+
     return _get_local_embedding_provider(model_name)

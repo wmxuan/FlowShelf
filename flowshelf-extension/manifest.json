@@ -31,7 +31,7 @@
   ],
   "content_scripts": [
     {
-      "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*", "http://*:3000/*", "http://localhost:8972/*", "http://127.0.0.1:8972/*", "https://*.flowshelf.app/*"],
+      "matches": ["http://localhost:3000/*", "http://127.0.0.1:3000/*", "http://localhost:8972/*", "http://127.0.0.1:8972/*", "https://*.flowshelf.app/*"],
       "js": ["src/content/bridge.ts"],
       "run_at": "document_start"
     }
