@@ -65,7 +65,14 @@ function parseTabDragId(id: string): { gi: number; tabIndex: number } | null {
   return { gi: Number(m[1]), tabIndex: Number(m[2]) };
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
+// API 基址：
+// - 生产模式（FastAPI 同时提供 API + 静态文件）：空字符串，走相对路径
+// - 开发模式（Next.js 3000 + FastAPI 8972）：需拼完整 URL，否则 /api/* 请求打到 Next.js 404
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || (
+  typeof window !== 'undefined' && window.location.port === '3000'
+    ? 'http://localhost:8972'
+    : ''
+);
 
 /** 分组卡片顶部边条颜色循环（与 background 中 Chrome 群组颜色一致） */
 const GROUP_COLORS = [
@@ -573,7 +580,7 @@ export default function TabsPage() {
     setEnriching(index);
     try {
       const content = await getTabContent(tab.id);
-      const res = await fetch(`/api/learning`, {
+      const res = await fetch(`${API_BASE}/api/learning`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

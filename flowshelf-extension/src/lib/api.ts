@@ -2,7 +2,7 @@
  * FlowShelf 扩展端 API 客户端
  *
  * 与 Web 前端共用同一套后端接口（/api/cards, /api/tools, /api/classify）。
- * API 基址存储在 chrome.storage.local，默认 http://localhost:8000。
+ * API 基址存储在 chrome.storage.local，默认 http://localhost:8972。
  */
 
 import type {
@@ -83,13 +83,19 @@ async function request<T>(
   const url = `${base}/api${path}`;
   console.log("[FlowShelf] API request:", options.method || "GET", url);
 
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    });
+  } catch (fetchErr) {
+    console.error("[FlowShelf] fetch failed:", url, fetchErr);
+    throw new Error(`Failed to fetch`);
+  }
 
   if (!response.ok) {
     let detail = `请求失败: ${response.status}`;

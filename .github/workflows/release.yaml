@@ -182,39 +182,44 @@ jobs:
         shell: bash
         run: |
           cd backend
-          BINS=$(find dist -name "flowshelf-backend*" -type f 2>/dev/null)
-          echo "=== 二进制体积报告 (${{ matrix.platform }}) ==="
-          for b in $BINS; do
-            size_bytes=$(stat -c%s "$b" 2>/dev/null || stat -f%z "$b" 2>/dev/null || echo 0)
-            size_mb=$(awk "BEGIN{printf \"%.1f\", $size_bytes/1048576}")
-            limit_mb=2000
-            pct=$(awk "BEGIN{printf \"%.1f\", $size_bytes/2147483648*100}")
-            echo "$b  ->  ${size_mb}MB  (GitHub 2GB 限制已用 ${pct}%)"
-            if [ "$size_bytes" -gt 2147483648 ]; then
-              echo "❌ 超过 GitHub 2GB 单个 Release Asset 限制！"
-              exit 1
-            elif [ "$size_bytes" -gt 1073741824 ]; then
-              echo "⚠️ 已超 1GB，建议进一步优化"
-            else
-              echo "✅ 体积合规"
-            fi
-          done
+          # onedir 模式：产物在 dist/flowshelf-backend/ 目录
+          DIST_DIR="dist/flowshelf-backend"
+          if [ ! -d "$DIST_DIR" ]; then
+            echo "❌ 产物目录不存在: $DIST_DIR"
+            exit 1
+          fi
+          total_bytes=$(du -sb "$DIST_DIR" 2>/dev/null | awk '{print $1}' || du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1*1024}')
+          total_mb=$(awk "BEGIN{printf \"%.1f\", $total_bytes/1048576}")
+          pct=$(awk "BEGIN{printf \"%.1f\", $total_bytes/2147483648*100}")
+          echo "=== 产物体积报告 (${{ matrix.platform }}) ==="
+          echo "  目录: $DIST_DIR"
+          echo "  大小: ${total_mb}MB  (GitHub 2GB 限制已用 ${pct}%)"
+          if [ "$total_bytes" -gt 2147483648 ]; then
+            echo "❌ 超过 GitHub 2GB 单个 Release Asset 限制！"
+            exit 1
+          elif [ "$total_bytes" -gt 1073741824 ]; then
+            echo "⚠️ 已超 1GB，建议进一步优化"
+          else
+            echo "✅ 体积合规"
+          fi
 
       - name: 🔍 Verify binary architecture
         if: matrix.platform == 'macos'
         run: |
           cd backend
-          BIN=$(find dist -name "flowshelf-backend" -type f 2>/dev/null | head -1)
-          if [ -n "$BIN" ]; then
+          BIN="dist/flowshelf-backend/flowshelf-backend"
+          if [ -f "$BIN" ]; then
             echo "=== Binary architecture ==="
             file "$BIN"
-            # 确认包含 x86_64，不含纯 arm64
             if file "$BIN" | grep -q "x86_64"; then
               echo "✅ Binary contains x86_64 code"
             else
               echo "❌ Binary does NOT contain x86_64 code!"
               exit 1
             fi
+          else
+            echo "❌ Binary not found: $BIN"
+            exit 1
           fi
         shell: bash
 
@@ -222,7 +227,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: backend-${{ matrix.platform }}
-          path: backend/dist/flowshelf-backend*
+          path: backend/dist/flowshelf-backend/
 
   # ── 4. 打包发布物 ──────────────────────────────────────
   package:
@@ -278,10 +283,10 @@ jobs:
 
           macOS 提示：
           - 安装脚本会自动清除 Gatekeeper 隔离标记
-          - 若仍提示"已损坏"，请手动运行：xattr -cr ./flowshelf-backend
+          - 若仍提示"已损坏"，请手动运行：xattr -cr ./flowshelf-backend/
 
           如需手动启动后端：
-             ./flowshelf-backend
+             ./flowshelf-backend/flowshelf-backend
 
           访问 Web 应用：
              http://localhost:8972
@@ -290,15 +295,18 @@ jobs:
 
       - name: 📦 Set binary permissions
         if: matrix.platform != 'windows'
-        run: chmod +x package/flowshelf-backend
+        run: chmod +x package/flowshelf-backend/flowshelf-backend
         shell: bash
 
       - name: "🍎 macOS: ad-hoc code sign and clear quarantine"
         if: matrix.platform == 'macos'
         run: |
-          # ad-hoc 签名：防止 macOS Gatekeeper 报"已损坏"
-          codesign --force --deep -s - package/flowshelf-backend 2>/dev/null || echo "codesign skipped"
-          # 清除隔离属性，防止"无法打开"弹窗（对整个目录清除）
+          # onedir 模式：Python.framework 在 flowshelf-backend/ 目录中可见
+          # --deep 递归签名所有嵌套代码（含 Python.framework），防止 Gatekeeper 报"已损坏"
+          codesign --force --deep -s - package/flowshelf-backend/ 2>/dev/null || echo "codesign failed"
+          echo "=== 验证签名 ==="
+          codesign -vvv --deep package/flowshelf-backend/ 2>&1 || echo "签名验证失败（可能仍被 Gatekeeper 拦截）"
+          # 清除隔离属性
           xattr -cr package/ 2>/dev/null || echo "xattr skipped"
         shell: bash
 

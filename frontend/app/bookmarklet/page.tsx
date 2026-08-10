@@ -3,14 +3,14 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, XCircle, Loader2, ArrowLeft } from 'lucide-react';
-import { cardsApi } from '@/services/api';
-import type { Card } from '@/types';
+import { learningApi } from '@/services/api';
+import type { LearningItem } from '@/types';
 
 type Status = 'loading' | 'success' | 'error';
 
 export default function BookmarkletPage() {
   const [status, setStatus] = useState<Status>('loading');
-  const [card, setCard] = useState<Card | null>(null);
+  const [item, setItem] = useState<LearningItem | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [sourceUrl, setSourceUrl] = useState('');
 
@@ -32,10 +32,10 @@ export default function BookmarkletPage() {
       settled = true;
       window.removeEventListener('message', handleMessage);
       clearTimeout(timer);
-      cardsApi
-        .create(url, undefined, content)
-        .then((c) => {
-          setCard(c);
+      learningApi
+        .create(url, '', 'unspecified', content)
+        .then((result) => {
+          setItem(result);
           setStatus('success');
         })
         .catch((e: Error) => {
@@ -85,12 +85,12 @@ export default function BookmarkletPage() {
         {status === 'success' && (
           <>
             <CheckCircle2 className="mx-auto mb-4 h-12 w-12 text-green-500" />
-            <h1 className="text-xl font-semibold mb-2">收藏成功</h1>
-            <p className="text-sm text-muted-foreground mb-1">已生成知识卡片：</p>
-            <p className="font-medium mb-6 line-clamp-2">{card?.title}</p>
+            <h1 className="text-xl font-semibold mb-2">已放入暂存区</h1>
+            <p className="text-sm text-muted-foreground mb-1">AI 正在后台生成摘要，请在暂存区查看：</p>
+            <p className="font-medium mb-6 line-clamp-2">{item?.title || sourceUrl}</p>
             <div className="flex justify-center gap-3">
-              <Link href="/cards" className="button button-primary">
-                查看卡片库
+              <Link href="/learning" className="button button-primary">
+                查看暂存区
               </Link>
               <button
                 onClick={() => window.close()}

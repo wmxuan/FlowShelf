@@ -1,7 +1,13 @@
 import type { Card, Tool, SearchResponse, TagCount, LearningItem, LearningConvertResult } from '@/types';
 
-// API 基础配置
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+// API 基础配置：
+// - 生产模式（FastAPI 同时提供 API + 静态文件）：'/api'，走相对路径
+// - 开发模式（Next.js 3000 + FastAPI 8972）：需拼完整 URL，否则 /api/* 请求打到 Next.js 404
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
+  typeof window !== 'undefined' && window.location.port === '3000'
+    ? 'http://localhost:8972/api'
+    : '/api'
+);
 
 export async function apiRequest<T>(
   endpoint: string,

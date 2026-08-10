@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST_NAME="com.flowshelf.backend"
-BACKEND_BIN="$SCRIPT_DIR/flowshelf-backend"
+BACKEND_BIN="$SCRIPT_DIR/flowshelf-backend/flowshelf-backend"
 
 # 由 manifest.json 中的 key 决定的扩展 ID
 EXTENSION_ID="dkkdefbjgcoepbdjdddaidllmkhpnadn"

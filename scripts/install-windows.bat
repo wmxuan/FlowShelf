@@ -7,7 +7,7 @@ setlocal enabledelayedexpansion
 
 set HOST_NAME=com.flowshelf.backend
 set SCRIPT_DIR=%~dp0
-set BACKEND_BIN=%SCRIPT_DIR%flowshelf-backend.exe
+set BACKEND_BIN=%SCRIPT_DIR%flowshelf-backend\flowshelf-backend.exe
 set EXTENSION_ID=dkkdefbjgcoepbdjdddaidllmkhpnadn
 
 echo ========================================

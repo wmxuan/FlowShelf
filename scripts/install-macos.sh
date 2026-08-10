@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST_NAME="com.flowshelf.backend"
 MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 MANIFEST_FILE="$MANIFEST_DIR/$HOST_NAME.json"
-BACKEND_BIN="$SCRIPT_DIR/flowshelf-backend"
+BACKEND_BIN="$SCRIPT_DIR/flowshelf-backend/flowshelf-backend"
 
 # 由 manifest.json 中的 key 决定的扩展 ID
 EXTENSION_ID="dkkdefbjgcoepbdjdddaidllmkhpnadn"
@@ -19,7 +19,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # 1. 确保后端二进制可执行
 if [ ! -f "$BACKEND_BIN" ]; then
   echo "❌ 找不到后端二进制: $BACKEND_BIN"
-  echo "   请确认 flowshelf-backend 位于脚本同级目录"
+  echo "   请确认 flowshelf-backend/ 目录位于脚本同级目录"
   exit 1
 fi
 chmod +x "$BACKEND_BIN"

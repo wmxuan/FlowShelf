@@ -94,7 +94,13 @@ export default function Popup() {
       setTimeout(() => window.close(), 400);
     } catch (err) {
       console.error("[FlowShelf] collect error:", err);
-      setError(err instanceof Error ? err.message : "收藏失败");
+      // 提供更详细的错误信息，帮助定位 "Failed to fetch" 根因
+      const errMsg = err instanceof Error ? err.message : "收藏失败";
+      if (errMsg === "Failed to fetch") {
+        setError("连接后端失败，请确认后端正在运行（http://localhost:8972）");
+      } else {
+        setError(errMsg);
+      }
     } finally {
       setSavingType(null);
     }

@@ -202,17 +202,14 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # onedir 模式：二进制放到 COLLECT，不嵌入 EXE
     name='flowshelf-backend',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,          # 去掉符号表，典型减 10-30MB
-    upx=True,            # UPX 压缩（--best --lzma 在 actions 里额外调用，这里启用压缩）
+    strip=True,
+    upx=True,
     upx_exclude=[
-        # UPX 对 DLL 压缩后可能在某些 Windows 机器上加载失败，排除常见敏感库
         'python*.dll',
         'libcrypto*.so',
         'libssl*.so',
@@ -226,4 +223,22 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    a.binaries,
+    strip=True,
+    upx=True,
+    upx_exclude=[
+        'python*.dll',
+        'libcrypto*.so',
+        'libssl*.so',
+        'msvcp*.dll',
+        'vcruntime*.dll',
+    ],
+    name='flowshelf-backend',
 )
