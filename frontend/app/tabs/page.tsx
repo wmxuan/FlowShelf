@@ -80,23 +80,6 @@ interface VersionInfo {
   demoMode: boolean;
   apiBase: string;
 }
-const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
-
-useEffect(() => {
-  (async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/health`);
-      if (res.ok) {
-        const data = await res.json();
-        setVersionInfo({
-          version: data.version || '?',
-          demoMode: !!data.demo_mode,
-          apiBase: API_BASE || `${window.location.origin}`,
-        });
-      }
-    } catch { /* ignore */ }
-  })();
-}, []);
 
 /** 分组卡片顶部边条颜色循环（与 background 中 Chrome 群组颜色一致） */
 const GROUP_COLORS = [
@@ -261,6 +244,24 @@ export default function TabsPage() {
   const [enriching, setEnriching] = useState<number | null>(null);
   const [enrichMsg, setEnrichMsg] = useState('');
   const [organizing, setOrganizing] = useState(false);
+
+  // 版本信息（从 /api/health 获取）
+  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/health`);
+        if (res.ok) {
+          const data = await res.json();
+          setVersionInfo({
+            version: data.version || '?',
+            demoMode: !!data.demo_mode,
+            apiBase: API_BASE || `${window.location.origin}`,
+          });
+        }
+      } catch { /* ignore */ }
+    })();
+  }, []);
   const enrichMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [editMode, setEditMode] = useState(false);
