@@ -65,7 +65,7 @@ function parseTabDragId(id: string): { gi: number; tabIndex: number } | null {
   return { gi: Number(m[1]), tabIndex: Number(m[2]) };
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
 
 /** 分组卡片顶部边条颜色循环（与 background 中 Chrome 群组颜色一致） */
 const GROUP_COLORS = [

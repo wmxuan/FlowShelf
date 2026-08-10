@@ -265,6 +265,8 @@ jobs:
           FlowShelf 安装说明
           ===================
 
+          ⚠️ 重要：必须先运行安装脚本，再加载扩展！
+
           1. 运行安装脚本：
              - macOS: ./install-macos.sh
              - Windows: 双击 install-windows.bat
@@ -273,6 +275,10 @@ jobs:
           3. 开启「开发者模式」
           4. 点击「加载已解压的扩展程序」→ 选择 flowshelf-extension 目录
           5. 扩展加载后，后端会自动启动！
+
+          macOS 提示：
+          - 安装脚本会自动清除 Gatekeeper 隔离标记
+          - 若仍提示"已损坏"，请手动运行：xattr -cr ./flowshelf-backend
 
           如需手动启动后端：
              ./flowshelf-backend
@@ -291,9 +297,9 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           # ad-hoc 签名：防止 macOS Gatekeeper 报"已损坏"
-          codesign --force --deep -s - package/flowshelf-backend 2>/dev/null || echo "codesign skipped (not macOS)"
-          # 清除隔离属性，防止"无法打开"弹窗
-          xattr -cr package/flowshelf-backend 2>/dev/null || echo "xattr skipped"
+          codesign --force --deep -s - package/flowshelf-backend 2>/dev/null || echo "codesign skipped"
+          # 清除隔离属性，防止"无法打开"弹窗（对整个目录清除）
+          xattr -cr package/ 2>/dev/null || echo "xattr skipped"
         shell: bash
 
       - name: 📦 Create zip package
