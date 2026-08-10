@@ -14,7 +14,6 @@ AI Provider 抽象层
 import asyncio
 import hashlib
 import json
-import logging
 import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
@@ -22,13 +21,14 @@ from typing import List, Optional
 
 from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
 
+from app.core.logging import get_logger
 from app.db.schemas.ai_schemas import (
     CardAIOutput,
     ToolClassificationOutput,
     ToolGenerationOutput,
 )
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 _PROMPT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
 
@@ -129,7 +129,7 @@ class BaseAIProvider(ABC):
         try:
             return await self.generate_embedding(text, is_query=is_query)
         except Exception as exc:
-            logger.warning("Embedding 降级为 hash 向量：%s", exc)
+            log.warning("Embedding 降级为 hash 向量：%s", exc)
             return _hash_embedding(text)
 
     @abstractmethod
@@ -338,7 +338,7 @@ class RealAIProvider(BaseAIProvider):
                 temperature=0.0,
             )
         except (APITimeoutError, RateLimitError, APIError) as exc:
-            logger.warning("AI 分类失败，降级为 article：%s", exc)
+            log.warning("AI 分类失败，降级为 article：%s", exc)
             return {"type": "article", "tags": []}
 
         try:
@@ -346,7 +346,7 @@ class RealAIProvider(BaseAIProvider):
             parsed = ToolClassificationOutput.model_validate(data)
             return {"type": parsed.type, "tags": parsed.tags}
         except Exception:
-            logger.warning("AI 分类输出解析失败，降级为 article")
+            log.warning("AI 分类输出解析失败，降级为 article")
             return {"type": "article", "tags": []}
 
     async def generate_tool(
@@ -475,14 +475,14 @@ class RealAIProvider(BaseAIProvider):
                 temperature=0.0,
             )
         except (APITimeoutError, RateLimitError, APIError) as exc:
-            logger.warning("AI 单标签分组失败，降级为创建新组：%s", exc)
+            log.warning("AI 单标签分组失败，降级为创建新组：%s", exc)
             return {"action": "create", "group_name": "新标签"}
 
         raw = completion.choices[0].message.content or ""
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            logger.warning("AI 单标签分组返回非合法 JSON，降级为创建新组")
+            log.warning("AI 单标签分组返回非合法 JSON，降级为创建新组")
             return {"action": "create", "group_name": "新标签"}
 
         action = data.get("action", "create")
@@ -492,7 +492,7 @@ class RealAIProvider(BaseAIProvider):
         if action == "assign":
             existing_names = {g["name"] for g in existing_groups}
             if group_name not in existing_names:
-                logger.warning("AI 返回的 group_name 不在已有分组中，降级为创建新组")
+                log.warning("AI 返回的 group_name 不在已有分组中，降级为创建新组")
                 return {"action": "create", "group_name": "新标签"}
 
         return {"action": action, "group_name": group_name}

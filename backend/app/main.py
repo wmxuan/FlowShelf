@@ -2,13 +2,15 @@
 FastAPI 主入口
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from pathlib import Path
+import time
 
 from app.core.config import get_settings
+from app.core.logging import setup_logging, get_logger
 from app.core.database import init_db
 from app.api.routes.cards import router as cards_router
 from app.api.routes.tools import router as tools_router
@@ -31,10 +33,32 @@ def _has_valid_api_key(settings) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期"""
+    settings = get_settings()
+    # 初始化日志系统（structlog + SQLAlchemy 引擎日志）
+    setup_logging(log_level=settings.LOG_LEVEL, debug=settings.DEBUG)
+    log = get_logger("app.main")
+    log.info(
+        "server_starting",
+        app=settings.APP_NAME,
+        version=settings.APP_VERSION,
+        host=settings.HOST,
+        port=settings.PORT,
+        debug=settings.DEBUG,
+        demo_mode=settings.DEMO_MODE,
+        has_api_key=_has_valid_api_key(settings),
+    )
     # 启动时初始化数据库
     await init_db()
+    log.info(
+        "database_initialized",
+        db_url=(
+            settings.DATABASE_URL.split("///")[-1]
+            if "///" in settings.DATABASE_URL
+            else "n/a"
+        ),
+    )
     yield
-    # 关闭时清理资源（如有）
+    log.info("server_shutting_down")
 
 
 def create_app() -> FastAPI:
@@ -68,6 +92,38 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # 请求/响应日志中间件
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        """记录每个 HTTP 请求的路径、方法、状态码、耗时"""
+        log = get_logger("app.http")
+        start = time.perf_counter()
+        # 跳过健康检查和静态文件的噪声日志
+        path = request.url.path
+        skip = (
+            path == "/api/health"
+            or path.startswith("/_next")
+            or path.startswith("/assets")
+        )
+        if not skip:
+            log.info(
+                "request",
+                method=request.method,
+                path=path,
+                client=request.client.host if request.client else "-",
+            )
+        response = await call_next(request)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        if not skip:
+            log.info(
+                "response",
+                method=request.method,
+                path=path,
+                status=response.status_code,
+                elapsed_ms=round(elapsed_ms, 1),
+            )
+        return response
 
     # 注册路由
     app.include_router(cards_router)
@@ -110,18 +166,29 @@ def create_app() -> FastAPI:
         - base_url: 非空时覆盖，空字符串/不传时保留已有值
         - model: 非空时覆盖，空字符串/不传时保留已有值
         """
+        log = get_logger("app.settings")
         api_key = request_body.get("api_key", "")
         base_url = request_body.get("base_url")
         model = request_body.get("model")
         if api_key:
             settings.OPENAI_API_KEY = api_key
+            log.info("api_key_set", has_key=True)
         elif "api_key" in request_body:
             settings.OPENAI_API_KEY = ""
+            log.info("api_key_cleared")
         if base_url:  # 仅非空时覆盖
             settings.OPENAI_BASE_URL = base_url
+            log.info("base_url_set", base_url=base_url)
         if model:  # 仅非空时覆盖
             settings.AI_MODEL = model
+            log.info("model_set", model=model)
         has_valid_key = _has_valid_api_key(settings)
+        log.info(
+            "ai_config_updated",
+            ai_mode="real" if has_valid_key else "demo",
+            model=settings.AI_MODEL,
+            has_base_url=bool(settings.OPENAI_BASE_URL),
+        )
         return {
             "ok": True,
             "has_api_key": has_valid_key,

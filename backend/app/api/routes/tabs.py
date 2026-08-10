@@ -5,7 +5,7 @@ Tab 管理 API 路由
 扩展端通过 chrome.tabs.query 获取当前所有 Tab，传给后端 AI 进行主题聚类。
 """
 
-import logging
+from app.core.logging import get_logger
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from app.core.config import get_settings
 from app.providers.base import get_ai_provider
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 router = APIRouter(prefix="/api/tabs", tags=["tabs"])
 
@@ -91,7 +91,7 @@ async def group_tabs(request: TabGroupRequest):
         result = await ai_provider.group_tabs(tabs_data)
         groups = result.get("groups", [])
     except Exception as exc:
-        logger.warning("AI Tab 归组失败，降级为单组：%s", exc)
+        log.warning("AI Tab 归组失败，降级为单组：%s", exc)
         groups = [{"name": "全部标签", "tab_indices": list(range(total))}]
 
     return TabGroupResponse(
@@ -133,7 +133,7 @@ async def assign_tab(request: TabAssignRequest):
     try:
         result = await ai_provider.assign_tab_to_group(tab_data, groups_data)
     except Exception as exc:
-        logger.warning("AI 单标签分组失败，降级为创建新组：%s", exc)
+        log.warning("AI 单标签分组失败，降级为创建新组：%s", exc)
         result = {"action": "create", "group_name": "新标签"}
 
     return TabAssignResponse(

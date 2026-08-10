@@ -8,14 +8,15 @@
 当前闸门 2 用字符串相似度（difflib + 包含关系），零依赖、立即可用。
 后续接入独立 Embedding 服务后，可将 _similarity 升级为余弦相似度，无需改调用方。
 """
+
 import difflib
-import logging
+from app.core.logging import get_logger
 from typing import List
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # 相似度阈值：高于此值认为是同一标签，归并到现有标签
 SIMILARITY_THRESHOLD = 0.85

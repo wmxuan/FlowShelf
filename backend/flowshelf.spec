@@ -104,6 +104,12 @@ a = Analysis(
         'jieba',
         # ── Jinja2 ──
         'jinja2',
+        # ── structlog（结构化日志） ──
+        'structlog',
+        'structlog.stdlib',
+        'structlog.dev',
+        'structlog.processors',
+        'structlog.contextvars',
     ],
     hookspath=[],
     hooksconfig={},

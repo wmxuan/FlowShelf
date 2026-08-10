@@ -5,7 +5,7 @@
 复用 provider.classify_tool，与工具箱保存时的分类逻辑保持一致。
 """
 
-import logging
+from app.core.logging import get_logger
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +17,7 @@ from app.providers.base import get_ai_provider
 from app.services.tag_service import get_candidate_tags, normalize_tags
 from app.tools.content_extractor import content_extractor
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 router = APIRouter(prefix="/api/classify", tags=["classify"])
 
@@ -50,7 +50,7 @@ async def classify_url(
     extracted_title = request.title
     if request.content:
         content_text = request.content
-        logger.info("分流使用扩展端预提取正文（%d 字符）", len(content_text))
+        log.info("分流使用扩展端预提取正文（%d 字符）", len(content_text))
     else:
         try:
             extraction = await content_extractor.extract(request.url)
@@ -59,11 +59,9 @@ async def classify_url(
                 if not extracted_title:
                     extracted_title = extraction.title
             else:
-                logger.warning(
-                    "分流抓取失败，降级为 url+title 分类: %s", extraction.error
-                )
+                log.warning("分流抓取失败，降级为 url+title 分类: %s", extraction.error)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("分流抓取异常，降级为 url+title 分类: %s", exc)
+            log.warning("分流抓取异常，降级为 url+title 分类: %s", exc)
 
     # Step 2: AI 分类
     candidates = await get_candidate_tags(db, "tools", top_n=30)
@@ -77,7 +75,7 @@ async def classify_url(
         classified_type = result["type"]
         tags = normalize_tags(result["tags"], candidates)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("AI 分类失败，降级为 article: %s", exc)
+        log.warning("AI 分类失败，降级为 article: %s", exc)
         classified_type = "article"
         tags = []
 

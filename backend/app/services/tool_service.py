@@ -2,7 +2,7 @@
 工具箱服务层
 """
 
-import logging
+from app.core.logging import get_logger
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -15,7 +15,7 @@ from app.services.base_crud_service import BaseCRUDService
 from app.services.tag_service import get_candidate_tags, normalize_tags
 from app.tools.content_extractor import content_extractor
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class ToolService(BaseCRUDService[Tool, ToolUpdate]):
@@ -58,19 +58,19 @@ class ToolService(BaseCRUDService[Tool, ToolUpdate]):
         content_text = ""
         if content:
             content_text = content
-            logger.info("工具收藏使用扩展端预提取正文（%d 字符）", len(content_text))
+            log.info("工具收藏使用扩展端预提取正文（%d 字符）", len(content_text))
         else:
             try:
                 extraction = await content_extractor.extract(url)
                 if extraction.success:
                     content_text = extraction.content
                 else:
-                    logger.warning(
+                    log.warning(
                         "工具页面抓取失败，降级为 url+title 打标签: %s",
                         extraction.error,
                     )
             except Exception as exc:  # noqa: BLE001 - 抓取兜底
-                logger.warning("工具页面抓取异常，降级为 url+title 打标签: %s", exc)
+                log.warning("工具页面抓取异常，降级为 url+title 打标签: %s", exc)
 
         # Step 2: 标签来源——预生成标签（来自 generate 预览）优先；否则 AI 分类打标签
         candidates = await get_candidate_tags(self.db, "tools", top_n=30)
@@ -118,18 +118,18 @@ class ToolService(BaseCRUDService[Tool, ToolUpdate]):
         content_text = ""
         if content:
             content_text = content
-            logger.info("工具预览使用扩展端预提取正文（%d 字符）", len(content_text))
+            log.info("工具预览使用扩展端预提取正文（%d 字符）", len(content_text))
         else:
             try:
                 extraction = await content_extractor.extract(url)
                 if extraction.success:
                     content_text = extraction.content
                 else:
-                    logger.warning(
+                    log.warning(
                         "工具页面抓取失败，降级为空正文交 AI: %s", extraction.error
                     )
             except Exception as exc:  # noqa: BLE001 - 抓取兜底
-                logger.warning("工具页面抓取异常，降级为空正文交 AI: %s", exc)
+                log.warning("工具页面抓取异常，降级为空正文交 AI: %s", exc)
 
         candidates = await get_candidate_tags(self.db, "tools", top_n=30)
         result = await self.ai_provider.generate_tool(

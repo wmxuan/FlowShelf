@@ -8,7 +8,7 @@
 4. 转换：用户在 Web 应用确认后转为卡片/工具
 """
 
-import logging
+from app.core.logging import get_logger
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
@@ -24,7 +24,7 @@ from app.services.tag_service import get_candidate_tags, normalize_tags
 from app.services.card_service import CardService
 from app.services.tool_service import ToolService
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class LearningService:
@@ -66,7 +66,7 @@ class LearningService:
         )
         existing: Optional[LearningItem] = result.scalars().first()
         if existing:
-            logger.info(
+            log.info(
                 "create_item 命中 60s 同 URL 去重：source_url=%s 已存在 item #%s (type=%s)，直接返回",
                 data.source_url,
                 existing.id,
@@ -104,12 +104,12 @@ class LearningService:
             # 用 create_task 异步执行，不等待结果
             asyncio.create_task(self._ai_enrich(item.id, content_text, data.item_type))
         elif data.item_type == "unspecified":
-            logger.info(
+            log.info(
                 "待学习项 %d item_type=unspecified，跳过后台 AI 补全（等用户在暂存区选择类型后再生成）",
                 item.id,
             )
         else:
-            logger.info(
+            log.info(
                 "待学习项 %d 无正文，跳过 AI 补全（将在用户打开 Web 应用时触发）",
                 item.id,
             )
@@ -130,11 +130,11 @@ class LearningService:
                 result = await self._do_ai_enrich(bg_db, item_id, content, item_type)
                 if result:
                     await bg_db.commit()
-                    logger.info("待学习项 %d AI 补全完成", item_id)
+                    log.info("待学习项 %d AI 补全完成", item_id)
             except Exception as exc:
                 # 失败时设置 is_ready=True，标记"已尝试"，避免前端误报为"生成中"
                 # 前端通过 is_ready=true && AI 内容为空 判定为"生成失败"，显示重新生成按钮
-                logger.error("待学习项 %d AI 补全失败：%s", item_id, exc)
+                log.error("待学习项 %d AI 补全失败：%s", item_id, exc)
                 try:
                     await bg_db.execute(
                         update(LearningItem)
@@ -143,9 +143,7 @@ class LearningService:
                     )
                     await bg_db.commit()
                 except Exception as inner_exc:
-                    logger.error(
-                        "待学习项 %d 标记失败状态时出错：%s", item_id, inner_exc
-                    )
+                    log.error("待学习项 %d 标记失败状态时出错：%s", item_id, inner_exc)
 
     async def _do_ai_enrich(
         self, db: AsyncSession, item_id: int, content: str, item_type: str
@@ -286,7 +284,7 @@ class LearningService:
                 raise ValueError(
                     "AI 内容尚未生成，且无存储正文可用于补全。请稍后再试或手动重新生成。"
                 )
-            logger.info(
+            log.info(
                 "待学习项 %d 按类型 %s 同步补全 AI 内容...",
                 item_id,
                 item.item_type,
@@ -307,13 +305,9 @@ class LearningService:
             # 校验 AI 补全确实成功（_ai_enrich 内部 try/except 会吞掉 AI 异常，
             # 这里兜底防止空内容落库到 cards/tools）
             if item.item_type == "article" and not item.ai_summary:
-                raise ValueError(
-                    "AI 摘要生成失败，请稍后重试或在卡片中手动填写摘要。"
-                )
+                raise ValueError("AI 摘要生成失败，请稍后重试或在卡片中手动填写摘要。")
             if item.item_type == "tool" and not item.tool_description:
-                raise ValueError(
-                    "AI 工具描述生成失败，请稍后重试或手动填写描述。"
-                )
+                raise ValueError("AI 工具描述生成失败，请稍后重试或手动填写描述。")
 
         # （3）转换为卡片或工具（按最终类型分支）
         if item.item_type == "article":

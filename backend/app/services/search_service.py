@@ -10,7 +10,7 @@
 阈值：向量分数 ≥ 0.5 或关键词匹配，才进入结果集
 """
 
-import logging
+from app.core.logging import get_logger
 import math
 from typing import List, Optional, Tuple
 
@@ -22,7 +22,7 @@ from app.db.schemas.schemas import SearchResult
 from app.providers.base import BaseAIProvider
 from app.services.search_utils import keyword_score
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class SearchService:
@@ -132,7 +132,7 @@ class SearchService:
         try:
             return await self.ai_provider.generate_embedding(query, is_query=True)
         except Exception as exc:
-            logger.warning("Query embedding 生成失败，降级为纯关键词搜索：%s", exc)
+            log.warning("Query embedding 生成失败，降级为纯关键词搜索：%s", exc)
             return None
 
     def _compute_hybrid_score(

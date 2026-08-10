@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-import logging
+from app.core.logging import get_logger
 from typing import Optional
 
 import httpx
@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # 浏览器伪装 UA：很多站点对默认 httpx UA 直接 403
 _BROWSER_UA = (
@@ -97,9 +97,9 @@ class ContentExtractor:
             result = self._extract_with_trafilatura(html, final_url)
             if result.success and result.content:
                 return result
-            logger.info("trafilatura 抽取为空，降级到 bs4: %s", final_url)
+            log.info("trafilatura 抽取为空，降级到 bs4: %s", final_url)
         except Exception as exc:  # noqa: BLE001 - 兜底所有异常
-            logger.warning("trafilatura 抽取异常: %s | url=%s", exc, final_url)
+            log.warning("trafilatura 抽取异常: %s | url=%s", exc, final_url)
 
         # Step 3: bs4 兜底
         try:
@@ -107,7 +107,7 @@ class ContentExtractor:
             if result.success:
                 return result
         except Exception as exc:  # noqa: BLE001
-            logger.warning("bs4 兜底异常: %s | url=%s", exc, final_url)
+            log.warning("bs4 兜底异常: %s | url=%s", exc, final_url)
 
         return ExtractionResult(
             success=False,

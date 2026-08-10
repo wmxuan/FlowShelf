@@ -13,13 +13,13 @@
    也不被 PyInstaller 打包进二进制。
 """
 
-import logging
+from app.core.logging import get_logger
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # bge 中文模型官方推荐的 query 前缀
 _QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
@@ -60,7 +60,7 @@ def _auto_install_sentence_transformers() -> bool:
 
     # PyInstaller 打包环境中 sys.frozen 存在，不尝试自动安装
     if getattr(sys, "frozen", False):
-        logger.info("打包环境，跳过 sentence-transformers 自动安装")
+        log.info("打包环境，跳过 sentence-transformers 自动安装")
         return False
 
     # 检查 pip 是否可用
@@ -72,10 +72,10 @@ def _auto_install_sentence_transformers() -> bool:
             stderr=subprocess.DEVNULL,
         )
     except Exception:
-        logger.info("pip 不可用，跳过 sentence-transformers 自动安装")
+        log.info("pip 不可用，跳过 sentence-transformers 自动安装")
         return False
 
-    logger.info("检测到 sentence-transformers 未安装，尝试自动安装...")
+    log.info("检测到 sentence-transformers 未安装，尝试自动安装...")
     try:
         subprocess.check_call(
             [
@@ -88,10 +88,10 @@ def _auto_install_sentence_transformers() -> bool:
             ],
             timeout=300,
         )
-        logger.info("sentence-transformers 安装成功")
+        log.info("sentence-transformers 安装成功")
         return True
     except Exception as exc:
-        logger.warning("sentence-transformers 自动安装失败: %s", exc)
+        log.warning("sentence-transformers 自动安装失败: %s", exc)
         return False
 
 
@@ -129,7 +129,7 @@ class LocalEmbeddingProvider:
             from sentence_transformers import SentenceTransformer
 
             cache_dir = _get_model_cache_dir()
-            logger.info(
+            log.info(
                 "加载本地 Embedding 模型: %s (缓存目录: %s)",
                 self._model_name,
                 cache_dir,
@@ -148,7 +148,7 @@ class LocalEmbeddingProvider:
                 "get_embedding_dimension",
                 getattr(self._model, "get_sentence_embedding_dimension", None),
             )
-            logger.info("Embedding 模型加载完成，维度: %d", get_dim())
+            log.info("Embedding 模型加载完成，维度: %d", get_dim())
         return self._model
 
     def embed_text(self, text: str, is_query: bool = False) -> List[float]:
@@ -216,14 +216,14 @@ def get_local_embedding_provider(
     if not _is_sentence_transformers_available():
         # 尝试自动安装 sentence-transformers
         if not _auto_install_sentence_transformers():
-            logger.warning(
+            log.warning(
                 "sentence-transformers 不可用，本地 Embedding 降级。"
                 "搜索将使用关键词匹配，AI 分组/摘要不受影响。"
             )
             return None
         # 安装后重新检测
         if not _is_sentence_transformers_available():
-            logger.warning(
+            log.warning(
                 "sentence-transformers 安装后仍无法导入（可能依赖版本冲突），"
                 "本地 Embedding 不可用。"
             )
@@ -236,7 +236,7 @@ def get_local_embedding_provider(
 
     # 首次使用时预下载模型（模型不存在时 SentenceTransformer 会自动从 HuggingFace 下载）
     if not _is_model_downloaded(model_name):
-        logger.info(
+        log.info(
             "Embedding 模型 %s 未缓存，首次使用时将自动下载到 %s",
             model_name,
             _get_model_cache_dir(),
@@ -245,5 +245,5 @@ def get_local_embedding_provider(
     try:
         return _get_local_embedding_provider(model_name)
     except Exception as exc:
-        logger.warning("LocalEmbeddingProvider 创建失败: %s", exc)
+        log.warning("LocalEmbeddingProvider 创建失败: %s", exc)
         return None

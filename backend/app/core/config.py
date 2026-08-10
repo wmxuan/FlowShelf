@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "FlowShelf API"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
+    LOG_LEVEL: str = "INFO"  # DEBUG/INFO/WARNING/ERROR
 
     # 数据库
     DATABASE_URL: str = "sqlite+aiosqlite:///./flowshelf.db"
