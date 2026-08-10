@@ -77,10 +77,8 @@ jobs:
         include:
           - os: macos-latest
             platform: macos
-            python-arch: "x64"
           - os: windows-latest
             platform: windows
-            python-arch: ""
     runs-on: ${{ matrix.os }}
     steps:
       - name: ⬇️ Checkout
@@ -96,7 +94,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          architecture: "${{ matrix.python-arch }}"
+
+      - name: 🔍 Verify Python architecture
+        run: |
+          echo "Runner OS: $RUNNER_OS"
+          echo "Runner Arch: $RUNNER_ARCH"
+          python -c "import struct,platform; print(f'Python arch: {struct.calcsize(\"P\")*8}-bit, machine: {platform.machine()}')"
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            echo "Rosetta available: $(/usr/bin/pgrep oahd >/dev/null 2>&1 && echo YES || echo NO)"
+          fi
+        shell: bash
 
       - name: 🗜️ UPX Cache
         id: upx-cache
@@ -131,14 +138,25 @@ jobs:
       - name: 📦 Install dependencies (requirements-base.txt，无 torch 以控体积)
         run: |
           cd backend
-          python -m venv .venv
-          source .venv/bin/activate 2>/dev/null || .venv\Scripts\activate.bat 2>/dev/null || true
-          python -m pip install --upgrade pip
-          # 用 requirements-base.txt：不含 sentence-transformers / torch，体积小 85%
-          pip install -r requirements-base.txt
-          pip install pyinstaller
+          # macOS: 通过 Rosetta 以 x86_64 模式创建 venv 和安装依赖
+          # 这样 PyInstaller 打包的 Python 是 x86_64，产出 x86_64 二进制
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            arch -x86_64 python3 -m venv .venv
+            source .venv/bin/activate
+            arch -x86_64 python -m pip install --upgrade pip
+            arch -x86_64 pip install -r requirements-base.txt
+            arch -x86_64 pip install pyinstaller
+          else
+            python -m venv .venv
+            source .venv/bin/activate 2>/dev/null || .venv\Scripts\activate.bat 2>/dev/null || true
+            python -m pip install --upgrade pip
+            pip install -r requirements-base.txt
+            pip install pyinstaller
+          fi
           echo "=== 已安装包列表 ==="
           pip list
+          echo "=== Venv Python arch ==="
+          python -c "import struct,platform; print(f'{struct.calcsize(\"P\")*8}-bit, machine={platform.machine()}')"
         shell: bash
 
       - name: 🏗️ Build binary with PyInstaller
@@ -150,8 +168,12 @@ jobs:
             export PATH="$HOME/.cache/upx/upx-${UPX_VERSION}-win64:$PATH"
           fi
           echo "=== PyInstaller start ==="
-          echo "Python arch: $(python -c 'import struct; print(struct.calcsize(\"P\")*8)-bit)')"
-          pyinstaller --clean flowshelf.spec
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            # macOS: 以 x86_64 模式运行 PyInstaller，产出 x86_64 二进制
+            arch -x86_64 pyinstaller --clean flowshelf.spec
+          else
+            pyinstaller --clean flowshelf.spec
+          fi
           echo "=== Build output ==="
           ls -lah dist/ || ls -lah backend/dist/ || true
         shell: bash
@@ -176,6 +198,23 @@ jobs:
               echo "✅ 体积合规"
             fi
           done
+
+      - name: 🔍 Verify binary architecture
+        if: matrix.platform == 'macos'
+        run: |
+          cd backend
+          BIN=$(find dist -name "flowshelf-backend" -type f 2>/dev/null | head -1)
+          if [ -n "$BIN" ]; then
+            echo "=== Binary architecture ==="
+            file "$BIN"
+            # 确认包含 x86_64，不含纯 arm64
+            if file "$BIN" | grep -q "x86_64"; then
+              echo "✅ Binary contains x86_64 code"
+            else
+              echo "❌ Binary does NOT contain x86_64 code!"
+              exit 1
+            fi
+          fi
         shell: bash
 
       - name: 📤 Upload backend artifact
