@@ -78,6 +78,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || (
 interface VersionInfo {
   version: string;
   demoMode: boolean;
+  hasApiKey: boolean;
+  aiMode: string;
   apiBase: string;
 }
 
@@ -256,6 +258,8 @@ export default function TabsPage() {
           setVersionInfo({
             version: data.version || '?',
             demoMode: !!data.demo_mode,
+            hasApiKey: !!data.has_api_key,
+            aiMode: data.ai_mode || 'demo',
             apiBase: API_BASE || `${window.location.origin}`,
           });
         }
@@ -1260,9 +1264,6 @@ export default function TabsPage() {
           {versionInfo && (
             <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground/70">
               <span className="px-1.5 py-0.5 bg-muted rounded font-mono">v{versionInfo.version}</span>
-              <span className={`px-1.5 py-0.5 rounded ${versionInfo.demoMode ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                {versionInfo.demoMode ? 'DEMO 模式' : 'AI 实战模式'}
-              </span>
               <span className="font-mono">{versionInfo.apiBase}</span>
             </div>
           )}

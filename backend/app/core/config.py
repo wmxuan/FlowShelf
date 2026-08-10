@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # AI 配置
     DEMO_MODE: bool = True
-    OPENAI_API_KEY: str = "sk-test-placeholder"
+    OPENAI_API_KEY: str = ""  # 用户通过前端设置页输入，切勿硬编码
     OPENAI_BASE_URL: str = ""  # 留空用官方，填入可走代理 / 兼容服务
     AI_MODEL: str = "gpt-4o-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # 服务器
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 8972
     # CORS：放行任意来源。
     # 理由：bookmarklet 在任意网页上下文中直接 fetch /api/learning，
     # 来源 Origin 不固定；当前无鉴权（无 cookie 依赖），allow_credentials=False，

@@ -711,8 +711,16 @@ def get_ai_provider(
     embedding_provider 未传入时，自动根据 settings.EMBEDDING_PROVIDER 创建：
     - local: 注入 LocalEmbeddingProvider（bge-small-zh-v1.5，零外部依赖）
     - openai: 不注入，走 OpenAI 兼容 API（DeepSeek 不支持，会降级 hash 向量）
+
+    智能模式切换：
+    - 即使 DEMO_MODE=true，如果 OPENAI_API_KEY 有效（非占位符），自动升级为 RealAIProvider
+    - 保证 AI 功能（分组、摘要等）在配置了 key 时始终可用
     """
-    if demo_mode:
+    # 有效 API key 判断：非空且不是占位符
+    _PLACEHOLDER_KEYS = {"sk-test-placeholder", "sk-test", "sk-placeholder", ""}
+    has_valid_key = bool(api_key) and api_key not in _PLACEHOLDER_KEYS
+
+    if demo_mode and not has_valid_key:
         return DemoAIProvider()
 
     # 未显式传入 embedding_provider 时，根据 settings 自动创建

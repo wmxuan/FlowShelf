@@ -17,6 +17,16 @@ from app.api.routes.classify import router as classify_router
 from app.api.routes.tabs import router as tabs_router
 from app.api.routes.learning import router as learning_router
 
+_PLACEHOLDER_KEYS = {"sk-test-placeholder", "sk-test", "sk-placeholder", ""}
+
+
+def _has_valid_api_key(settings) -> bool:
+    """判断 API Key 是否有效（非空且非占位符）"""
+    return (
+        bool(settings.OPENAI_API_KEY)
+        and settings.OPENAI_API_KEY not in _PLACEHOLDER_KEYS
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -70,11 +80,37 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     async def health_check():
         """健康检查"""
+        has_valid_key = _has_valid_api_key(settings)
         return {
             "status": "ok",
             "app": settings.APP_NAME,
             "version": settings.APP_VERSION,
             "demo_mode": settings.DEMO_MODE,
+            "has_api_key": has_valid_key,
+            "ai_mode": "real" if has_valid_key else "demo",
+        }
+
+    @app.post("/api/settings/api-key")
+    async def set_api_key(request_body: dict):
+        """前端设置 API Key（运行时生效，不写 .env）
+
+        - api_key: 非空时覆盖，空字符串表示清除
+        - base_url: 非空时覆盖，空字符串/不传时保留已有值（避免前端未填时误清 .env 配置）
+        """
+        api_key = request_body.get("api_key", "")
+        base_url = request_body.get("base_url")
+        if api_key:
+            settings.OPENAI_API_KEY = api_key
+        elif "api_key" in request_body:
+            # 显式传了空字符串 → 清除 key（切换回非 AI 模式）
+            settings.OPENAI_API_KEY = ""
+        if base_url:  # 仅非空时覆盖
+            settings.OPENAI_BASE_URL = base_url
+        has_valid_key = _has_valid_api_key(settings)
+        return {
+            "ok": True,
+            "has_api_key": has_valid_key,
+            "ai_mode": "real" if has_valid_key else "demo",
         }
 
     # 托管前端静态文件（必须在所有 API 路由之后挂载，确保 API 优先匹配）

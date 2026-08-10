@@ -108,8 +108,8 @@ export default function BookmarkletPage() {
             <h1 className="text-xl font-semibold mb-2">收藏失败</h1>
             <p className="text-sm text-muted-foreground mb-6 break-all">{errorMsg}</p>
             <div className="flex justify-center gap-3">
-              <Link href="/cards" className="button button-outline">
-                <ArrowLeft className="mr-1 h-4 w-4" /> 返回卡片库
+              <Link href="/learning" className="button button-outline">
+                <ArrowLeft className="mr-1 h-4 w-4" /> 返回暂存区
               </Link>
             </div>
           </>

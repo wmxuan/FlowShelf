@@ -74,7 +74,7 @@ export default function OptionsPage() {
               className="fs-input"
               value={apiUrl}
               onChange={(e) => setApiUrl(e.target.value)}
-              placeholder="http://localhost:8000"
+              placeholder="http://localhost:8972"
             />
           </div>
           <div className="fs-settings-field">
@@ -84,7 +84,7 @@ export default function OptionsPage() {
               className="fs-input"
               value={webUrl}
               onChange={(e) => setWebUrl(e.target.value)}
-              placeholder="http://localhost:3000"
+              placeholder="http://localhost:8972"
             />
           </div>
           <button
