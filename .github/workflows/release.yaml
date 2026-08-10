@@ -179,6 +179,7 @@ jobs:
         shell: bash
 
       - name: 📊 Report binary size
+        shell: bash
         run: |
           cd backend
           BINS=$(find dist -name "flowshelf-backend*" -type f 2>/dev/null)
