@@ -287,6 +287,15 @@ jobs:
         run: chmod +x package/flowshelf-backend
         shell: bash
 
+      - name: 🍎 macOS: ad-hoc code sign & clear quarantine
+        if: matrix.platform == 'macos'
+        run: |
+          # ad-hoc 签名：防止 macOS Gatekeeper 报"已损坏"
+          codesign --force --deep -s - package/flowshelf-backend 2>/dev/null || echo "codesign skipped (not macOS)"
+          # 清除隔离属性，防止"无法打开"弹窗
+          xattr -cr package/flowshelf-backend 2>/dev/null || echo "xattr skipped"
+        shell: bash
+
       - name: 📦 Create zip package
         run: |
           cd package

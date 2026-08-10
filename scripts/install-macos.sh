@@ -25,6 +25,10 @@ fi
 chmod +x "$BACKEND_BIN"
 echo "✅ 后端二进制已设置可执行权限"
 
+# 1.5 清除 macOS Gatekeeper 隔离标记（从网络下载的文件默认带 com.apple.quarantine）
+xattr -cr "$BACKEND_BIN" 2>/dev/null || true
+echo "✅ 已清除 Gatekeeper 隔离标记"
+
 # 2. 注册 Native Messaging Host
 mkdir -p "$MANIFEST_DIR"
 cat > "$MANIFEST_FILE" << EOF

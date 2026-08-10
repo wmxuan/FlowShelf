@@ -33,7 +33,35 @@ a = Analysis(
     # 去掉 sentence_transformers/torch 后，本项目不依赖这些重型库，
     # 显式 exclude 可防止 PyInstaller 通过依赖传递错误地打进来
     hiddenimports=[
-        # uvicorn 启动所需的子模块（PyInstaller 经常漏收）
+        # ── FastAPI 及其依赖链 ──
+        'fastapi',
+        'fastapi.app',
+        'fastapi.routing',
+        'fastapi.middleware',
+        'fastapi.middleware.cors',
+        'fastapi.staticfiles',
+        'fastapi.params',
+        'fastapi.dependencies',
+        'fastapi.encoders',
+        'fastapi.exception_handlers',
+        'fastapi.responses',
+        'fastapi.security',
+        'starlette',
+        'starlette.routing',
+        'starlette.middleware',
+        'starlette.middleware.cors',
+        'starlette.staticfiles',
+        'starlette.responses',
+        'starlette.requests',
+        'starlette.exceptions',
+        'starlette.status',
+        'starlette.convertors',
+        'starlette.schemas',
+        'anyio',
+        'anyio._backends._asyncio',
+        'sniffio',
+        # ── Uvicorn ──
+        'uvicorn',
         'uvicorn.logging',
         'uvicorn.lifespan.on',
         'uvicorn.protocols.http.auto',
@@ -43,24 +71,39 @@ a = Analysis(
         'uvicorn.protocols.http',
         'uvicorn.protocols.websockets',
         'uvicorn.protocols.http.h11_impl',
+        'uvicorn.protocols.http.httptools_impl',
         'uvicorn.loops',
         'uvicorn.loops.auto',
-        'anyio._backends._asyncio',
-        # SQLAlchemy async 方言
+        # ── SQLAlchemy / Alembic ──
+        'sqlalchemy',
+        'sqlalchemy.ext.asyncio',
+        'sqlalchemy.dialects.sqlite',
+        'sqlalchemy.sql.default_comparator',
+        'alembic',
         'aiosqlite',
-        # Pydantic 子模块
+        # ── Pydantic ──
+        'pydantic',
         'pydantic.deprecated.decorator',
-        # BeautifulSoup parsers
-        'bs4.builder',
-        'bs4.builder._lxml',
-        'bs4.builder._htmlparser',
-        # lxml 与 trafilatura 依赖
-        'lxml._elementpath',
-        'lxml.etree',
-        # httpx 依赖
+        'pydantic_settings',
+        # ── OpenAI ──
+        'openai',
+        'httpx',
         'httpcore',
         'httpcore._async',
         'httpcore._async.connection_pool',
+        # ── BeautifulSoup / lxml / trafilatura ──
+        'bs4',
+        'bs4.builder',
+        'bs4.builder._lxml',
+        'bs4.builder._htmlparser',
+        'lxml',
+        'lxml._elementpath',
+        'lxml.etree',
+        'trafilatura',
+        # ── jieba ──
+        'jieba',
+        # ── Jinja2 ──
+        'jinja2',
     ],
     hookspath=[],
     hooksconfig={},
