@@ -250,7 +250,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: backend-${{ matrix.platform }}
-          path: package/
+          path: package/flowshelf-backend/
 
       - name: 📥 Download extension artifact
         uses: actions/download-artifact@v4
