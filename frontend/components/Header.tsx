@@ -19,12 +19,23 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || (
     : ''
 );
 
+// 预设 AI Provider 配置
+const AI_PROVIDERS = [
+  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com', model: 'gpt-4o-mini' },
+  { id: 'moonshot', name: 'Moonshot（月之暗面）', baseUrl: 'https://api.moonshot.cn', model: 'moonshot-v1-8k' },
+  { id: 'qwen', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode', model: 'qwen-turbo' },
+  { id: 'custom', name: '自定义', baseUrl: '', model: '' },
+];
+
 export default function Header() {
   const pathname = usePathname();
   const [aiMode, setAiMode] = useState(false);
   const [showKeyDialog, setShowKeyDialog] = useState(false);
+  const [providerId, setProviderId] = useState('deepseek');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -49,7 +60,7 @@ export default function Header() {
           await fetch(`${API_BASE}/api/settings/api-key`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ api_key: '', base_url: '' }),
+            body: JSON.stringify({ api_key: '' }),
           });
         } catch { /* ignore */ }
         setAiMode(false);
@@ -58,12 +69,39 @@ export default function Header() {
       // 切换到 AI 模式：弹窗输入 key
       setShowKeyDialog(true);
       setError('');
+      // 重置为默认 Provider
+      setProviderId('deepseek');
+      setBaseUrl('');
+      setModel('');
     }
   }, [aiMode]);
+
+  // Provider 切换时自动填充 base_url 和 model
+  const handleProviderChange = useCallback((id: string) => {
+    setProviderId(id);
+    const provider = AI_PROVIDERS.find(p => p.id === id);
+    if (provider && id !== 'custom') {
+      setBaseUrl(provider.baseUrl);
+      setModel(provider.model);
+    } else {
+      setBaseUrl('');
+      setModel('');
+    }
+  }, []);
 
   const handleSaveKey = useCallback(async () => {
     if (!apiKey.trim()) {
       setError('请输入 API Key');
+      return;
+    }
+    const finalBaseUrl = providerId === 'custom' ? baseUrl.trim() : (AI_PROVIDERS.find(p => p.id === providerId)?.baseUrl || baseUrl.trim());
+    const finalModel = providerId === 'custom' ? model.trim() : (AI_PROVIDERS.find(p => p.id === providerId)?.model || model.trim());
+    if (!finalBaseUrl) {
+      setError('请填写 Base URL');
+      return;
+    }
+    if (!finalModel) {
+      setError('请填写 Model');
       return;
     }
     setSaving(true);
@@ -72,7 +110,7 @@ export default function Header() {
       const res = await fetch(`${API_BASE}/api/settings/api-key`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: apiKey.trim(), base_url: baseUrl.trim() }),
+        body: JSON.stringify({ api_key: apiKey.trim(), base_url: finalBaseUrl, model: finalModel }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -80,6 +118,7 @@ export default function Header() {
         setShowKeyDialog(false);
         setApiKey('');
         setBaseUrl('');
+        setModel('');
       } else {
         setError('保存失败，请重试');
       }
@@ -88,7 +127,7 @@ export default function Header() {
     } finally {
       setSaving(false);
     }
-  }, [apiKey, baseUrl]);
+  }, [apiKey, baseUrl, model, providerId]);
 
   const navItems = ALL_NAV_ITEMS.filter(item => aiMode || item.alwaysShow);
 
@@ -141,9 +180,21 @@ export default function Header() {
           <div className="w-full max-w-md rounded-xl bg-background p-6 shadow-xl border border-border">
             <h2 className="text-lg font-semibold mb-1">切换到 AI 模式</h2>
             <p className="text-sm text-muted-foreground mb-4">
-              AI 模式需要配置 OpenAI 兼容 API Key，用于智能分组、摘要生成、语义搜索等功能。
+              选择 AI 服务商并填入 API Key，即可启用智能分组、摘要生成、语义搜索等功能。
             </p>
             <div className="space-y-3">
+              <div>
+                <label className="text-sm font-medium mb-1 block">AI 服务商 *</label>
+                <select
+                  value={providerId}
+                  onChange={(e) => handleProviderChange(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  {AI_PROVIDERS.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">API Key *</label>
                 <input
@@ -154,20 +205,39 @@ export default function Header() {
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 />
               </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">Base URL（可选）</label>
-                <input
-                  type="text"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="留空用 OpenAI 官方，或填代理地址"
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                />
-              </div>
+              {providerId === 'custom' ? (
+                <>
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Base URL *</label>
+                    <input
+                      type="text"
+                      value={baseUrl}
+                      onChange={(e) => setBaseUrl(e.target.value)}
+                      placeholder="https://api.example.com"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Model *</label>
+                    <input
+                      type="text"
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                      placeholder="模型名称"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="text-xs text-muted-foreground space-y-0.5">
+                  <div>Base URL: {AI_PROVIDERS.find(p => p.id === providerId)?.baseUrl}</div>
+                  <div>Model: {AI_PROVIDERS.find(p => p.id === providerId)?.model}</div>
+                </div>
+              )}
               {error && <p className="text-sm text-destructive">{error}</p>}
               <div className="flex justify-end gap-2 pt-2">
                 <button
-                  onClick={() => { setShowKeyDialog(false); setApiKey(''); setBaseUrl(''); setError(''); }}
+                  onClick={() => { setShowKeyDialog(false); setApiKey(''); setBaseUrl(''); setModel(''); setError(''); }}
                   className="button button-outline text-sm"
                 >
                   取消

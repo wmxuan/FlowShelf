@@ -92,20 +92,23 @@ def create_app() -> FastAPI:
 
     @app.post("/api/settings/api-key")
     async def set_api_key(request_body: dict):
-        """前端设置 API Key（运行时生效，不写 .env）
+        """前端设置 AI 配置（运行时生效，不写 .env）
 
         - api_key: 非空时覆盖，空字符串表示清除
-        - base_url: 非空时覆盖，空字符串/不传时保留已有值（避免前端未填时误清 .env 配置）
+        - base_url: 非空时覆盖，空字符串/不传时保留已有值
+        - model: 非空时覆盖，空字符串/不传时保留已有值
         """
         api_key = request_body.get("api_key", "")
         base_url = request_body.get("base_url")
+        model = request_body.get("model")
         if api_key:
             settings.OPENAI_API_KEY = api_key
         elif "api_key" in request_body:
-            # 显式传了空字符串 → 清除 key（切换回非 AI 模式）
             settings.OPENAI_API_KEY = ""
         if base_url:  # 仅非空时覆盖
             settings.OPENAI_BASE_URL = base_url
+        if model:  # 仅非空时覆盖
+            settings.AI_MODEL = model
         has_valid_key = _has_valid_api_key(settings)
         return {
             "ok": True,
