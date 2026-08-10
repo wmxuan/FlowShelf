@@ -28,7 +28,7 @@ const DEDUP_WINDOW_MS = 3000;
 const recentlySavedLearningUrls = new Map<string, number>();
 const RECENT_SAVED_WINDOW_MS = 60 * 1000;
 
-// 扩展安装/更新时：自动启动后端 + 创建右键菜单
+// 扩展安装/更新时：创建右键菜单 + 启动后端
 chrome.runtime.onInstalled.addListener(async () => {
   // 1. 创建右键菜单
   chrome.contextMenus.create({
@@ -37,18 +37,57 @@ chrome.runtime.onInstalled.addListener(async () => {
     contexts: ["page"],
   });
 
-  // 2. 尝试通过 Native Messaging 启动后端
+  // 2. 启动后端
+  await ensureBackendRunning();
+});
+
+// 扩展 Service Worker 启动时也确保后端在运行
+// （onInstalled 只在安装/更新时触发，Service Worker 重启后需要重新检测）
+chrome.runtime.onStartup.addListener(async () => {
+  await ensureBackendRunning();
+});
+
+/**
+ * 确保后端在运行：
+ * 1. 先探测是否已在运行 → 直接用
+ * 2. Native Messaging 启动 → 用返回的 URL
+ * 3. Native Messaging 也失败 → 再探测一次（启动需要时间）
+ */
+async function ensureBackendRunning(): Promise<void> {
+  // 先快速探测是否已在运行
+  for (let port = 8972; port <= 8979; port++) {
+    try {
+      const res = await fetch(`http://localhost:${port}/api/health`, {
+        method: "GET",
+        signal: AbortSignal.timeout(500),
+      });
+      if (res.ok) {
+        const url = `http://localhost:${port}`;
+        await setApiBase(url);
+        await setWebBase(url);
+        console.log("[FlowShelf] Backend already running on port", port);
+        return;
+      }
+    } catch {
+      /* not running */
+    }
+  }
+
+  // 后端未运行，尝试 Native Messaging 启动
   const result = await startBackend();
   if (result.status === "ok" && result.port && result.url) {
     await setApiBase(result.url);
     await setWebBase(result.url);
-    console.log("[FlowShelf] Backend auto-started on port", result.port);
-  } else {
-    console.warn("[FlowShelf] Native Messaging start failed:", result.message);
-    // Fallback: 尝试探测已在运行的后端
-    await tryDetectBackend();
+    console.log("[FlowShelf] Backend auto-started via Native Messaging on port", result.port);
+    return;
   }
-});
+
+  console.warn("[FlowShelf] Native Messaging start failed:", result.message);
+
+  // Native Messaging 也失败，等 2 秒再探测一次（可能有其他进程在启动）
+  await new Promise((r) => setTimeout(r, 2000));
+  await tryDetectBackend();
+}
 
 /**
  * 探测已在运行的后端（Native Messaging 失败时的 fallback）

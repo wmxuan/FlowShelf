@@ -561,26 +561,94 @@ class DemoAIProvider(BaseAIProvider):
         }
 
     async def group_tabs(self, tabs: List[dict]) -> dict:
-        """DEMO 模式 Tab 归组：按域名简单分组"""
+        """DEMO 模式 Tab 归组：按域名分组，同域名下不同路径自动细分
+
+        策略：
+        1. 提取主域名（如 github.com、stackoverflow.com）
+        2. 同域名下，如果路径有明显分类（如 /questions、/pull、/issues），
+           按路径前缀细分（同前缀归一组）
+        3. 同域名下标签少于 3 个时，不细分，全部归入域名组
+        """
         from collections import defaultdict
         from urllib.parse import urlparse
 
-        domain_groups: dict[str, list[int]] = defaultdict(list)
+        # 按域名收集
+        domain_tabs: dict[str, list[tuple[int, dict]]] = defaultdict(list)
         for i, t in enumerate(tabs):
             try:
                 host = urlparse(t.get("url", "")).netloc.replace("www.", "")
-                domain_groups[host or "其他"].append(i)
+                domain_tabs[host or "其他"].append((i, t))
             except Exception:
-                domain_groups["其他"].append(i)
+                domain_tabs["其他"].append((i, t))
 
         groups = []
-        for domain, indices in domain_groups.items():
-            groups.append(
-                {
-                    "name": f"{domain} 相关" if domain != "其他" else "其他",
-                    "tab_indices": indices,
-                }
-            )
+        for domain, indexed_tabs in domain_tabs.items():
+            if domain == "其他" or len(indexed_tabs) <= 2:
+                # 少量标签不细分
+                groups.append(
+                    {
+                        "name": f"{domain} 相关" if domain != "其他" else "其他",
+                        "tab_indices": [idx for idx, _ in indexed_tabs],
+                    }
+                )
+                continue
+
+            # 同域名下尝试按路径前缀细分
+            path_groups: dict[str, list[int]] = defaultdict(list)
+            for idx, t in indexed_tabs:
+                try:
+                    path = urlparse(t.get("url", "")).path.strip("/")
+                    # 取路径第一段作为分类（如 /questions、/pull、/issues）
+                    first_segment = path.split("/")[0] if path else ""
+                    # 常见分类关键词映射
+                    if first_segment in ("questions", "q", "a"):
+                        key = "问答"
+                    elif first_segment in ("pull", "pulls", "issues", "merge_requests"):
+                        key = "代码协作"
+                    elif first_segment in (
+                        "docs",
+                        "wiki",
+                        "documentation",
+                        "guide",
+                        "guides",
+                    ):
+                        key = "文档"
+                    elif first_segment in (
+                        "blog",
+                        "posts",
+                        "article",
+                        "articles",
+                        "news",
+                    ):
+                        key = "文章/博客"
+                    elif first_segment in ("search", "results", "find"):
+                        key = "搜索结果"
+                    elif first_segment in ("settings", "config", "profile", "account"):
+                        key = "设置/配置"
+                    elif first_segment:
+                        key = first_segment
+                    else:
+                        key = "首页/浏览"
+                except Exception:
+                    key = "其他"
+                path_groups[key].append(idx)
+
+            if len(path_groups) <= 1:
+                # 无需细分
+                groups.append(
+                    {
+                        "name": f"{domain} 相关",
+                        "tab_indices": [idx for idx, _ in indexed_tabs],
+                    }
+                )
+            else:
+                for segment, indices in path_groups.items():
+                    groups.append(
+                        {
+                            "name": f"{domain} · {segment}",
+                            "tab_indices": indices,
+                        }
+                    )
 
         return {"groups": groups}
 
