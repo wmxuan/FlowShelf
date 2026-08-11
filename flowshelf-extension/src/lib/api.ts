@@ -2,7 +2,16 @@
  * FlowShelf 扩展端 API 客户端
  *
  * 与 Web 前端共用同一套后端接口（/api/cards, /api/tools, /api/classify）。
- * API 基址存储在 chrome.storage.local，默认 http://localhost:8972。
+ *
+ * 地址体系：
+ *   API_BASE → 后端 API 地址（8972 端口，自托管模式）
+ *   WEB_BASE → 前端 Web 应用地址（开发模式可能是 3000/3001，自托管模式与 API 同端口）
+ *
+ * 自动探测策略：
+ *   1. 用户显式设置过 → 直接使用，不探测
+ *   2. 未设置 → 探测常见端口，找到可用的前端地址
+ *      - 开发模式：3000, 3001, 3002（Next.js dev 常用端口）
+ *      - 自托管模式：8972-8979（与后端同端口）
  */
 
 import type {
@@ -30,6 +39,51 @@ export const DEFAULT_WEB_BASE = "http://localhost:8972";
 /** storage key：Web 应用地址 */
 export const WEB_BASE_KEY = "flowshelf_web_base";
 
+/** storage key：标记用户是否显式设置过 WEB_BASE（用于区分"未设置"和"显式设置为默认值"） */
+export const WEB_BASE_SET_KEY = "flowshelf_web_base_set";
+
+/**
+ * 自动探测前端 Web 应用地址
+ *
+ * 探测顺序：开发端口（3000-3002）→ 自托管端口（8972-8979）
+ * 前端判定条件：能访问且不是纯 API 端口（即该端口能返回 HTML 页面）
+ * 实际实现：先探测 3000-3002 是否有 Next.js dev server，再探测 8972-8979 的 /api/health
+ */
+export async function detectWebBase(): Promise<string> {
+  // 开发端口：Next.js dev server，尝试访问根路径（返回 HTML 即为前端）
+  const devPorts = [3000, 3001, 3002];
+  for (const port of devPorts) {
+    try {
+      const res = await fetch(`http://localhost:${port}/`, {
+        method: "GET",
+        signal: AbortSignal.timeout(1000),
+      });
+      // Next.js dev server 返回 HTML
+      const ct = res.headers.get("content-type") || "";
+      if (res.ok && ct.includes("text/html")) {
+        console.log(`[FlowShelf] Web 前端探测命中: localhost:${port}`);
+        return `http://localhost:${port}`;
+      }
+    } catch { /* not running */ }
+  }
+
+  // 自托管端口：前端与后端同端口，通过 /api/health 判定
+  for (let port = 8972; port <= 8979; port++) {
+    try {
+      const res = await fetch(`http://localhost:${port}/api/health`, {
+        method: "GET",
+        signal: AbortSignal.timeout(1500),
+      });
+      if (res.ok) {
+        console.log(`[FlowShelf] 自托管模式探测命中: localhost:${port}`);
+        return `http://localhost:${port}`;
+      }
+    } catch { /* not running */ }
+  }
+
+  return DEFAULT_WEB_BASE;
+}
+
 /**
  * 获取当前配置的 API 基址
  */
@@ -53,22 +107,34 @@ export async function setApiBase(url: string): Promise<void> {
 
 /**
  * 获取当前配置的 Web 应用基址（cards / toolbox 页面所在站点）
+ *
+ * 优先级：用户显式设置 > 自动探测 > 默认值
  */
 export async function getWebBase(): Promise<string> {
   return new Promise((resolve) => {
-    chrome.storage.local.get([WEB_BASE_KEY], (result) => {
-      const base = result[WEB_BASE_KEY] as string | undefined;
-      resolve(base || DEFAULT_WEB_BASE);
+    chrome.storage.local.get([WEB_BASE_KEY, WEB_BASE_SET_KEY], async (result) => {
+      const userSet = result[WEB_BASE_SET_KEY] as boolean | undefined;
+      // 用户显式设置过 → 直接使用，不探测
+      if (userSet) {
+        const base = (result[WEB_BASE_KEY] as string) || DEFAULT_WEB_BASE;
+        resolve(base);
+        return;
+      }
+      // 未设置 → 自动探测
+      const detected = await detectWebBase();
+      // 缓存探测结果（但不标记为用户设置，下次仍可探测）
+      await chrome.storage.local.set({ [WEB_BASE_KEY]: detected });
+      resolve(detected);
     });
   });
 }
 
 /**
- * 设置 Web 应用基址
+ * 设置 Web 应用基址（用户显式设置，标记为不可覆盖）
  */
 export async function setWebBase(url: string): Promise<void> {
   return new Promise((resolve) => {
-    chrome.storage.local.set({ [WEB_BASE_KEY]: url }, () => resolve());
+    chrome.storage.local.set({ [WEB_BASE_KEY]: url, [WEB_BASE_SET_KEY]: true }, () => resolve());
   });
 }
 
@@ -235,4 +301,12 @@ export const learningApi = {
       method: "POST",
       body: JSON.stringify({ source_url, title, item_type, content }),
     }),
+
+  /** 检查后端健康状态（含 ai_mode 字段） */
+  checkHealth: async (): Promise<{ ai_mode: string }> => {
+    const base = await getApiBase();
+    const res = await fetch(`${base}/api/health`);
+    if (!res.ok) throw new Error("Health check failed");
+    return res.json();
+  },
 };

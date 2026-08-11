@@ -51,6 +51,8 @@ def _hash_embedding(text: str, dim: int = 1536) -> List[float]:
 class BaseAIProvider(ABC):
     """AI Provider 基类"""
 
+    is_demo: bool = False  # 子类覆盖：DemoAIProvider=True
+
     def __init__(self, embedding_provider=None):
         """
         Args:
@@ -499,7 +501,14 @@ class RealAIProvider(BaseAIProvider):
 
 
 class DemoAIProvider(BaseAIProvider):
-    """DEMO 模式 AI Provider（返回模拟数据）"""
+    """DEMO 模式 AI Provider（基础模式降级实现）
+
+    设计原则：基础模式 = 完整但无AI增强
+    - classify_tool / group_tabs / assign_tab_to_group：降级可用（URL关键词/域名分组）
+    - generate_card / generate_tool / generate_embedding：不可用，调用方应跳过
+    """
+
+    is_demo: bool = True
 
     async def generate_card(
         self, url: str, content: str, candidate_tags: Optional[List[str]] = None
@@ -720,7 +729,10 @@ def get_ai_provider(
     _PLACEHOLDER_KEYS = {"sk-test-placeholder", "sk-test", "sk-placeholder", ""}
     has_valid_key = bool(api_key) and api_key not in _PLACEHOLDER_KEYS
 
-    if demo_mode and not has_valid_key:
+    # 无有效 API key 时始终返回 DemoAIProvider（不论 DEMO_MODE 设置），
+    # 避免 DEMO_MODE=false 但 key 被运行时清除后，
+    # AsyncOpenAI(api_key="") 构造抛异常导致所有依赖 AIProvider 的端点 500
+    if not has_valid_key:
         return DemoAIProvider()
 
     # 未显式传入 embedding_provider 时，根据 settings 自动创建

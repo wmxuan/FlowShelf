@@ -8,6 +8,7 @@ import SearchBar, { SearchStatus } from '@/components/SearchBar';
 import TagFilter from '@/components/TagFilter';
 import { EmptyState, ListRowSkeleton } from '@/components/StateDisplays';
 import { useListPage } from '@/hooks/useListPage';
+import { useAiMode } from '@/hooks/useAiMode';
 import ToolCard, { ToolCardActions } from '@/components/cards/ToolCard';
 import ToolDetailModal from '@/components/cards/ToolDetailModal';
 import { adaptTool, type ToolCardData } from '@/components/cards/shared';
@@ -31,9 +32,11 @@ export default function ToolboxPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedTool, setSelectedTool] = useState<ToolCardData | null>(null);
   const [sortBy, setSortBy] = useState('created_at');
+  const { aiMode } = useAiMode();
 
   // toolbox 额外依赖 sortBy：变化时需要重新 fetch（useListPage extraDeps）
   const list = useListPage<Tool, { tag?: string; query?: string; sortBy?: string }>({
+    queryKeyPrefix: 'tools',
     fetchList: (opts) =>
       toolsApi.list({
         limit: 50,
@@ -44,6 +47,7 @@ export default function ToolboxPage() {
     adaptSearchResult: adaptSearchResultToTool,
     deleteItem: async (id) => { await toolsApi.delete(id); },
     searchType: 'tools',
+    useSemantic: aiMode,
     extraDeps: [sortBy],
   });
 

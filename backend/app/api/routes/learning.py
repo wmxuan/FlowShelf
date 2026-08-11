@@ -2,16 +2,16 @@
 待学习队列 API 路由
 
 核心端点：
-- POST /api/learning  — 快速保存（<500ms 返回，AI 后台异步补全）
+- POST /api/learning  — 快速保存（<500ms 返回）
 - GET  /api/learning  — 获取列表
 - GET  /api/learning/{id} — 获取详情
+- POST /api/learning/{id}/ai-generate — 按需 AI 生成（前端转换弹窗调用）
 - POST /api/learning/{id}/convert — 转为卡片/工具
-- POST /api/learning/{id}/enrich — 手动触发 AI 补全
 - DELETE /api/learning/{id} — 删除
 """
 
 from fastapi import APIRouter, Query
-from typing import Optional, List
+from typing import List, Union
 
 from app.api.deps import DBSession, AIProvider
 from app.core.exceptions import AppException, ErrorCode
@@ -21,6 +21,9 @@ from app.db.schemas.schemas import (
     LearningItemResponse,
     LearningItemConvertRequest,
     LearningItemUpdateRequest,
+    LearningAiGenerateRequest,
+    LearningAiGenerateArticleResponse,
+    LearningAiGenerateToolResponse,
     MessageResponse,
 )
 
@@ -33,7 +36,7 @@ async def create_learning_item(
     db: DBSession,
     ai_provider: AIProvider,
 ):
-    """快速保存到待学习队列（<500ms 返回，AI 后台异步补全）"""
+    """快速保存到待学习队列（<500ms 返回）"""
     service = LearningService(db, ai_provider)
     try:
         item = await service.create_item(request)
@@ -74,6 +77,29 @@ async def get_learning_item(
     return item
 
 
+@router.post(
+    "/{item_id}/ai-generate",
+    response_model=Union[
+        LearningAiGenerateArticleResponse, LearningAiGenerateToolResponse
+    ],
+)
+async def ai_generate_learning_item(
+    item_id: int,
+    request: LearningAiGenerateRequest,
+    db: DBSession,
+    ai_provider: AIProvider,
+):
+    """按需 AI 生成（前端转换弹窗调用，基础模式返回空字段）"""
+    service = LearningService(db, ai_provider)
+    try:
+        result = await service.ai_generate(item_id, request.item_type)
+    except ValueError as exc:
+        raise AppException(ErrorCode.VALIDATION_ERROR, detail=str(exc))
+    except Exception as exc:
+        raise AppException(ErrorCode.AI_CALL_FAILED, detail=f"AI 生成失败：{exc}")
+    return result
+
+
 @router.post("/{item_id}/convert", response_model=LearningItemResponse)
 async def convert_learning_item(
     item_id: int,
@@ -92,30 +118,6 @@ async def convert_learning_item(
         raise AppException(
             ErrorCode.LEARNING_CONVERT_FAILED,
             detail=f"转换失败：{exc.__class__.__name__}: {exc}",
-        )
-    if not item:
-        raise AppException(ErrorCode.NOT_FOUND, detail="待学习项不存在")
-    return item
-
-
-@router.post("/{item_id}/enrich", response_model=LearningItemResponse)
-async def enrich_learning_item(
-    item_id: int,
-    request: Optional[dict] = None,
-    db: DBSession = None,
-    ai_provider: AIProvider = None,
-):
-    """手动触发 AI 补全"""
-    service = LearningService(db, ai_provider)
-    content = (request or {}).get("content", "")
-    try:
-        item = await service.trigger_enrich(item_id, content)
-    except ValueError as exc:
-        raise AppException(ErrorCode.VALIDATION_ERROR, detail=str(exc))
-    except Exception as exc:
-        raise AppException(
-            ErrorCode.LEARNING_ENRICH_FAILED,
-            detail=f"AI 补全失败：{exc.__class__.__name__}: {exc}",
         )
     if not item:
         raise AppException(ErrorCode.NOT_FOUND, detail="待学习项不存在")

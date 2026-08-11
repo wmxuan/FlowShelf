@@ -1,9 +1,11 @@
 'use client';
 
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useState, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';
 import { Search, Sparkles, ExternalLink, FileText, Wrench, Loader2 } from 'lucide-react';
 import { searchApi, SEARCH_DEFAULT_LIMIT } from '@/services/api';
+import { useAiMode } from '@/hooks/useAiMode';
 import type { SearchResult } from '@/types';
 
 export default function SearchPage() {
@@ -19,51 +21,47 @@ function SearchContent() {
   const initialQ = searchParams.get('q') || '';
 
   const [query, setQuery] = useState(initialQ);
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [appliedQuery, setAppliedQuery] = useState(initialQ.trim() || '');
   const [activeTab, setActiveTab] = useState<'all' | 'card' | 'tool'>('all');
   const autoRan = useRef(false);
+  const { aiMode } = useAiMode();
 
-  const handleSearch = async (q?: string) => {
-    const searchTerm = (q ?? query).trim();
-    if (!searchTerm) return;
+  // ============ 搜索结果（useQuery，按 query + aiMode 缓存） ============
 
-    setIsLoading(true);
-    setHasSearched(true);
-    setActiveTab('all');
+  const searchQueryKey = ['search', appliedQuery, aiMode] as const;
 
-    try {
-      // 并行调用 cards + tools 两次，与单库页（/cards、/toolbox）使用完全相同的
-      // (type, limit, query) 参数，确保顶部全局搜索的分类计数与单库搜索结果一致。
-      // 不再使用 type=all —— 后者走跨类型混合排序后截断，与单库各自排序后截断本质不同，
-      // 在数据量接近/超过 limit 时必然产生不一致。
+  const { data: results = [], isLoading, isFetching } = useQuery({
+    queryKey: searchQueryKey,
+    queryFn: async (): Promise<SearchResult[]> => {
+      if (!appliedQuery) return [];
       const [cardsResp, toolsResp] = await Promise.all([
-        searchApi.semantic(searchTerm, 'cards', SEARCH_DEFAULT_LIMIT),
-        searchApi.semantic(searchTerm, 'tools', SEARCH_DEFAULT_LIMIT),
+        searchApi.semantic(appliedQuery, 'cards', SEARCH_DEFAULT_LIMIT, aiMode),
+        searchApi.semantic(appliedQuery, 'tools', SEARCH_DEFAULT_LIMIT, aiMode),
       ]);
-      // 合并后按 score 降序，使「全部」Tab 仍按相关度统一展示
-      const merged = [...cardsResp.results, ...toolsResp.results].sort(
+      return [...cardsResp.results, ...toolsResp.results].sort(
         (a, b) => b.score - a.score
       );
-      setResults(merged);
-    } catch (err) {
-      console.error('搜索失败:', err);
-      alert('搜索失败');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    },
+    enabled: !!appliedQuery,
+    placeholderData: (prev) => prev, // query/aiMode 变化时保留旧结果，无闪烁
+    gcTime: 5 * 60 * 1000, // 搜索结果缓存 5 分钟
+  });
+
+  const hasSearched = !!appliedQuery;
 
   // 从 Header 全局搜索跳转来时（URL 带 q），自动执行一次搜索
-  useEffect(() => {
-    if (autoRan.current) return;
-    if (initialQ.trim()) {
-      autoRan.current = true;
-      handleSearch(initialQ);
+  if (!autoRan.current && initialQ.trim()) {
+    autoRan.current = true;
+    // appliedQuery 已在 useState 初始化时设置，useQuery 会自动 fetch
+  }
+
+  const handleSearch = () => {
+    const q = query.trim();
+    if (q) {
+      setAppliedQuery(q);
+      setActiveTab('all');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialQ]);
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -72,8 +70,7 @@ function SearchContent() {
   };
 
   const scoreToPercentage = (score: number) => {
-    // 将 cosine similarity (-1 到 1) 转换为百分比
-    return Math.round((score + 1) * 50);
+    return Math.round(score * 100);
   };
 
   // 按 result.type 分桶，前端过滤（不混杂）
@@ -106,14 +103,14 @@ function SearchContent() {
               onKeyDown={handleKeyDown}
               placeholder="例如：能去图片背景的网站..."
               className="input flex-1"
-              disabled={isLoading}
+              disabled={isFetching}
             />
             <button
-              onClick={() => handleSearch()}
-              disabled={isLoading || !query.trim()}
+              onClick={handleSearch}
+              disabled={isFetching || !query.trim()}
               className="button button-primary"
             >
-              {isLoading ? (
+              {isFetching ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   搜索中
@@ -131,7 +128,7 @@ function SearchContent() {
       </div>
 
       {/* 搜索结果 */}
-      {hasSearched && !isLoading && (
+      {hasSearched && !isFetching && (
         <div className="space-y-4">
           {/* Tab 切换：全部 / 知识卡片 / 工具 —— 前端按 result.type 分桶，不混杂 */}
           {results.length > 0 && (
@@ -165,6 +162,9 @@ function SearchContent() {
             {activeTab !== 'all' && results.length > 0 && (
               <span className="ml-1">（共 {results.length} 个）</span>
             )}
+            <span className={`ml-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${aiMode ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+              {aiMode ? '✨ 语义排序' : '🔤 关键词排序'}
+            </span>
           </p>
 
           {filteredResults.length === 0 ? (
@@ -185,7 +185,8 @@ function SearchContent() {
             <div className="space-y-3">
               {filteredResults.map((result, idx) => (
                 <div key={idx} className="card flex gap-4">
-                  {/* 相关性条 */}
+                  {/* 相关性条（仅 AI 模式显示，基础模式下分数无语义含义） */}
+                  {aiMode && (
                   <div className="flex flex-col items-center justify-center w-8">
                     <div className="text-xs text-muted-foreground mb-1">
                       {scoreToPercentage(result.score)}%
@@ -197,6 +198,7 @@ function SearchContent() {
                       />
                     </div>
                   </div>
+                  )}
 
                   {/* 内容 */}
                   <div className="flex-1 min-w-0">

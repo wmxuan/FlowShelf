@@ -11,6 +11,7 @@
 """
 
 from app.core.logging import get_logger
+import asyncio
 import math
 from typing import List, Optional, Tuple
 
@@ -25,6 +26,16 @@ from app.services.search_utils import keyword_score
 log = get_logger(__name__)
 
 
+def _get_local_embedding_provider():
+    """获取本地 Embedding Provider 单例（不依赖 API Key）"""
+    try:
+        from app.providers.local_embedding import get_local_embedding_provider
+
+        return get_local_embedding_provider()
+    except Exception:
+        return None
+
+
 class SearchService:
     """语义搜索服务"""
 
@@ -35,6 +46,13 @@ class SearchService:
     # 0.3 对中文短查询偏低（"快看看"等泛化短语会与大量弱相关内容产生 0.3~0.5 相似度，
     # 导致召回率拉满但精度崩盘）。0.5 在 bge 中文模型上接近"明显相关"的分界线。
     MIN_VEC_THRESHOLD = 0.5
+    # 混合分数最低阈值：AI 语义模式下，混合分低于此值视为弱相关噪声，不返回
+    # bge 中文模型实测：0.35 以下基本无语义相关性（向量分低 + 关键词也弱 ≈ 噪声），
+    # 0.35-0.50 为弱相关（有一定关联但不确定），0.50+ 为明显相关
+    MIN_HYBRID_THRESHOLD = 0.35
+    # 关键词分数最低阈值：基础模式下，低于此值视为噪声
+    # 关键词分数 0.3 ≈ 不到一半的查询词命中了摘要（非标题/标签），相关性弱
+    MIN_KEYWORD_THRESHOLD = 0.3
 
     def __init__(self, db: AsyncSession, ai_provider: BaseAIProvider):
         self.db = db
@@ -45,7 +63,8 @@ class SearchService:
         query: str,
         search_type: str = "all",
         limit: int = 20,
-    ) -> Tuple[List[SearchResult], int]:
+        use_semantic: bool = True,
+    ) -> Tuple[List[SearchResult], int, bool]:
         """
         混合检索（向量 + 关键词）
 
@@ -53,14 +72,24 @@ class SearchService:
             query: 搜索查询
             search_type: 搜索类型（all | cards | tools）
             limit: 返回数量
+            use_semantic: 是否启用语义检索（基础模式传 False，纯关键词匹配）
 
         Returns:
-            (搜索结果列表, 总数)，无匹配的结果不返回
+            (搜索结果列表, 总数, 是否使用了语义检索)
         """
         results = []
 
-        # 1. 生成 query embedding（用于向量检索；失败降级为纯关键词）
-        query_embedding = await self._get_query_embedding(query)
+        # 1. 生成 query embedding（仅 use_semantic=True 时尝试；失败降级为纯关键词）
+        query_embedding = (
+            await self._get_query_embedding(query) if use_semantic else None
+        )
+
+        # 确定分数阈值：有语义向量时用混合阈值，否则用关键词阈值
+        min_score = (
+            self.MIN_HYBRID_THRESHOLD
+            if query_embedding is not None
+            else self.MIN_KEYWORD_THRESHOLD
+        )
 
         # 2. 搜索卡片
         if search_type in ("all", "cards"):
@@ -74,7 +103,7 @@ class SearchService:
                     card.ai_tags or [],
                     card.ai_summary,
                 )
-                if score > 0:
+                if score >= min_score:
                     results.append(
                         SearchResult(
                             id=card.id,
@@ -101,7 +130,7 @@ class SearchService:
                     tool.ai_tags or [],
                     tool.description or "",
                 )
-                if score > 0:
+                if score >= min_score:
                     results.append(
                         SearchResult(
                             id=tool.id,
@@ -122,13 +151,27 @@ class SearchService:
         total = len(results)
         results = results[:limit]
 
-        return results, total
+        semantic_used = query_embedding is not None
+        return results, total, semantic_used
 
     async def _get_query_embedding(self, query: str) -> Optional[List[float]]:
         """生成 query 的向量（is_query=True，bge 推荐加前缀）
 
-        失败返回 None，降级为纯关键词搜索。
+        优先使用本地 embedding（bge-small-zh，不依赖 API Key），
+        本地不可用时才走 ai_provider（可能降级为 hash 向量或 None）。
         """
+        # 1. 优先尝试本地 embedding（独立于 LLM API Key）
+        local_provider = _get_local_embedding_provider()
+        if local_provider is not None:
+            try:
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(
+                    None, lambda: local_provider.embed_text(query, is_query=True)
+                )
+            except Exception as exc:
+                log.warning("本地 embedding 生成失败，尝试 ai_provider：%s", exc)
+
+        # 2. 兜底走 ai_provider（RealAIProvider 可能走 OpenAI API，DemoAIProvider 返回 hash 向量）
         try:
             return await self.ai_provider.generate_embedding(query, is_query=True)
         except Exception as exc:

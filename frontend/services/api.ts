@@ -37,11 +37,21 @@ import type {
 
 // ============ 基础配置 ============
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
-  typeof window !== 'undefined' && window.location.port === '3000'
-    ? 'http://localhost:8972/api'
-    : '/api'
-);
+/**
+ * API 基址（全局唯一定义，其他文件统一引用）
+ *
+ * 优先级：
+ * 1. NEXT_PUBLIC_API_URL 环境变量（部署时设置，如 https://flowshelf.app/api）
+ * 2. 运行时自动判断：前端不在后端端口上 → 拼完整后端地址；同源 → 走相对路径
+ */
+const _BACKEND_ORIGIN = typeof window !== 'undefined' && window.location.port !== '8972'
+  ? 'http://localhost:8972'
+  : '';
+
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || `${_BACKEND_ORIGIN}/api`;
+
+/** 后端 origin（不含 /api 路径，供 tabs/page.tsx、Header.tsx 等直接拼接使用） */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || _BACKEND_ORIGIN;
 
 // ============ 结构化错误 ============
 
@@ -234,11 +244,12 @@ export const toolsApi = {
 export const SEARCH_DEFAULT_LIMIT = 50;
 
 export const searchApi = {
-  semantic: (query: string, type: string = 'all', limit: number = SEARCH_DEFAULT_LIMIT) => {
+  semantic: (query: string, type: string = 'all', limit: number = SEARCH_DEFAULT_LIMIT, useSemantic: boolean = true) => {
     const qs = new URLSearchParams();
     qs.set('q', query);
     qs.set('type', type);
     qs.set('limit', String(limit));
+    qs.set('semantic', String(useSemantic));
     return apiRequest<SearchResponse>(`/search?${qs.toString()}`);
   },
 };
@@ -299,6 +310,13 @@ export const learningApi = {
     apiRequest<LearningItem>(`/learning/${id}/enrich`, {
       method: 'POST',
       body: JSON.stringify({ content }),
+    }),
+
+  /** 按需 AI 生成（前端转换弹窗调用，基础模式返回空字段） */
+  aiGenerate: (id: number, itemType: 'article' | 'tool') =>
+    apiRequest<Record<string, unknown>>(`/learning/${id}/ai-generate`, {
+      method: 'POST',
+      body: JSON.stringify({ item_type: itemType }),
     }),
 
   convert: (id: number, overwrite: LearningItemConvertRequest = {}) =>

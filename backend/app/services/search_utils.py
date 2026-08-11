@@ -21,6 +21,7 @@ def keyword_score(query: str, title: str, tags: List[str], summary: str) -> floa
 
     权重：标题 = 标签 > 摘要（标签是 AI 精心打的，语义价值高）。
     综合覆盖率（匹配词比例）与匹配位置权重。
+    所有词都命中标题/标签 → 接近 1.0；仅个别词命中摘要 → 较低分。
     """
     terms = extract_terms(query)
     if not terms:
@@ -30,22 +31,29 @@ def keyword_score(query: str, title: str, tags: List[str], summary: str) -> floa
     tags_l = " ".join(tags or []).lower()
     summary_l = (summary or "").lower()
 
-    matched = 0
-    weight_sum = 0.0
+    # 按匹配位置分桶：标题/标签命中 = 高权，摘要命中 = 低权
+    high_matches = 0  # 标题或标签命中
+    low_matches = 0   # 仅摘要命中
     for term in terms:
-        if term in title_l:
-            matched += 1
-            weight_sum += 3.0
-        elif term in tags_l:
-            matched += 1
-            weight_sum += 3.0
+        if term in title_l or term in tags_l:
+            high_matches += 1
         elif term in summary_l:
-            matched += 1
-            weight_sum += 1.0
+            low_matches += 1
 
-    if matched == 0:
+    total_matched = high_matches + low_matches
+    if total_matched == 0:
         return 0.0
 
-    coverage = matched / len(terms)
-    avg_weight = weight_sum / (matched * 3.0)
-    return coverage * 0.6 + avg_weight * 0.4
+    # 覆盖率：匹配词占总查询词的比例
+    coverage = total_matched / len(terms)
+    # 高位占比：标题/标签命中数占总命中的比例（区分"真正相关" vs "勉强沾边"）
+    high_ratio = high_matches / total_matched
+
+    # 最终分数：覆盖率 × 0.5 + 高位占比 × 0.3 + 连续匹配奖励 × 0.2
+    # - coverage=1.0 + high_ratio=1.0 → 0.5+0.3+0.2 = 1.0（完美匹配）
+    # - coverage=0.5 + high_ratio=0.5 → 0.25+0.15+0.1 = 0.5（中等匹配）
+    # - coverage=1.0 + high_ratio=0.0 → 0.5+0.0+0.1 = 0.6（全部命中摘要，中等偏低）
+    # - coverage=0.33 + high_ratio=0.0 → 0.165+0.0+0.066 = 0.23（弱匹配，会被阈值过滤）
+    continuity_bonus = 0.2 if high_matches == len(terms) else (0.1 if high_matches > 0 else 0.0)
+
+    return coverage * 0.5 + high_ratio * 0.3 + continuity_bonus

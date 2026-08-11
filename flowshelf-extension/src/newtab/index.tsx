@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { getWebBase, detectWebBase, DEFAULT_WEB_BASE, WEB_BASE_KEY } from "@/lib/api";
 import "./newtab.css";
 
 /**
@@ -9,28 +10,8 @@ import "./newtab.css";
  * 因此用扩展页做跳板，立即重定向到 Web 应用。
  * Web 应用内通过 Next.js App Router 实现 SPA 路由。
  *
- * 如果后端未运行（连接失败），显示友好提示而非空白页。
+ * 地址自动探测：优先开发端口（3000-3002），再探测自托管端口（8972-8979）。
  */
-
-const DEFAULT_WEB_BASE = "http://localhost:8972";
-
-/**
- * 在 8972-8979 端口范围内探测后端，返回可用的 base URL 或 null
- */
-async function detectBackend(): Promise<string | null> {
-  for (let port = 8972; port <= 8979; port++) {
-    try {
-      const res = await fetch(`http://localhost:${port}/api/health`, {
-        method: "GET",
-        signal: AbortSignal.timeout(1500),
-      });
-      if (res.ok) {
-        return `http://localhost:${port}`;
-      }
-    } catch { /* not running */ }
-  }
-  return null;
-}
 
 export default function NewTabRedirect() {
   const [status, setStatus] = useState<"loading" | "redirecting" | "error">("loading");
@@ -39,24 +20,25 @@ export default function NewTabRedirect() {
   useEffect(() => {
     (async () => {
       // 1. 先读缓存地址
-      const { flowshelf_web_base } = await chrome.storage.local.get(["flowshelf_web_base"]);
+      const { flowshelf_web_base } = await chrome.storage.local.get([WEB_BASE_KEY]);
       const cached = (flowshelf_web_base as string || DEFAULT_WEB_BASE).replace(/\/$/, "");
 
-      // 2. 验证缓存地址是否可用
+      // 2. 验证缓存地址是否可用（尝试访问根路径）
       let base: string | null = null;
       try {
-        const res = await fetch(`${cached}/api/health`, { method: "GET", signal: AbortSignal.timeout(2000) });
-        if (res.ok) base = cached;
+        const res = await fetch(`${cached}/`, { method: "GET", signal: AbortSignal.timeout(2000) });
+        const ct = res.headers.get("content-type") || "";
+        if (res.ok && ct.includes("text/html")) base = cached;
       } catch { /* cached address unreachable */ }
 
-      // 3. 缓存不可用 → 全端口探测
+      // 3. 缓存不可用 → 自动探测（开发端口 + 自托管端口）
       if (!base) {
-        base = await detectBackend();
+        base = await detectWebBase();
       }
 
       if (base) {
         // 更新缓存，确保后续访问直接命中
-        await chrome.storage.local.set({ flowshelf_web_base: base });
+        await chrome.storage.local.set({ [WEB_BASE_KEY]: base });
         setWebBase(base);
         setStatus("redirecting");
         window.location.replace(`${base}/tabs`);

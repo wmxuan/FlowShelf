@@ -65,23 +65,9 @@ function parseTabDragId(id: string): { gi: number; tabIndex: number } | null {
   return { gi: Number(m[1]), tabIndex: Number(m[2]) };
 }
 
-// API 基址：
-// - 生产模式（FastAPI 同时提供 API + 静态文件）：空字符串，走相对路径
-// - 开发模式（Next.js 3000 + FastAPI 8972）：需拼完整 URL，否则 /api/* 请求打到 Next.js 404
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || (
-  typeof window !== 'undefined' && window.location.port === '3000'
-    ? 'http://localhost:8972'
-    : ''
-);
-
-/** 版本信息（从 /api/health 获取） */
-interface VersionInfo {
-  version: string;
-  demoMode: boolean;
-  hasApiKey: boolean;
-  aiMode: string;
-  apiBase: string;
-}
+// API 基址：统一从 api.ts 引入，避免多处重复定义
+import { API_BASE } from '@/services/api';
+import { useVersionInfo, type VersionInfo } from '@/hooks/useVersionInfo';
 
 /** 分组卡片顶部边条颜色循环（与 background 中 Chrome 群组颜色一致） */
 const GROUP_COLORS = [
@@ -247,25 +233,8 @@ export default function TabsPage() {
   const [enrichMsg, setEnrichMsg] = useState('');
   const [organizing, setOrganizing] = useState(false);
 
-  // 版本信息（从 /api/health 获取）
-  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/health`);
-        if (res.ok) {
-          const data = await res.json();
-          setVersionInfo({
-            version: data.version || '?',
-            demoMode: !!data.demo_mode,
-            hasApiKey: !!data.has_api_key,
-            aiMode: data.ai_mode || 'demo',
-            apiBase: API_BASE || `${window.location.origin}`,
-          });
-        }
-      } catch { /* ignore */ }
-    })();
-  }, []);
+  // 版本信息（从全局 useVersionInfo hook 获取，与其他页面共享同一份缓存）
+  const { versionInfo } = useVersionInfo();
   const enrichMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [editMode, setEditMode] = useState(false);
@@ -571,6 +540,35 @@ export default function TabsPage() {
     }
   }, [tabs]);
 
+  /** 基础分组：按域名简单分组（基础模式替代 AI 智能分组） */
+  const handleBasicGroup = useCallback(() => {
+    if (tabs.length === 0) return;
+    setLoading(true);
+    try {
+      const domainGroups: Record<string, number[]> = {};
+      tabs.forEach((tab, index) => {
+        try {
+          const url = new URL(tab.url);
+          const domain = url.hostname.replace(/^www\./, '');
+          if (!domainGroups[domain]) domainGroups[domain] = [];
+          domainGroups[domain].push(index);
+        } catch {
+          if (!domainGroups['其他']) domainGroups['其他'] = [];
+          domainGroups['其他'].push(index);
+        }
+      });
+      const newGroups: TabGroup[] = Object.entries(domainGroups).map(
+        ([name, indices]) => ({ name, tab_indices: indices })
+      );
+      setGroups(newGroups);
+      setExpandedGroups(new Set(newGroups.map((_, i) => i)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '基础分组失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [tabs]);
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -626,7 +624,12 @@ export default function TabsPage() {
         }),
       });
       if (!res.ok) throw new Error(`保存失败: ${res.status}`);
-      showEnrichMsg('✅ 已保存到待学习队列，AI 正在后台生成摘要...', 3000);
+      showEnrichMsg(
+        versionInfo?.aiMode === 'real'
+          ? '✅ 已保存到待学习队列，AI 正在后台生成摘要...'
+          : '✅ 已保存到待学习队列',
+        3000
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : '收藏失败');
     } finally {
@@ -677,7 +680,9 @@ export default function TabsPage() {
       const result = await groupTabs(requestGroups);
       if (result.success) {
         const groupCount = new Set(result.results?.map((r) => r.groupId)).size;
-        showEnrichMsg(`✅ 已创建 ${groupCount} 个标签群组，查看浏览器标签栏`, 4000);
+        const windowCount = new Set(result.results?.map((r) => r.windowId)).size;
+        const windowHint = windowCount > 1 ? `，分布在 ${windowCount} 个窗口` : '';
+        showEnrichMsg(`✅ 已创建 ${groupCount} 个标签群组${windowHint}，查看浏览器标签栏`, 4000);
       } else {
         setError(result.error || '整理失败');
       }
@@ -1278,12 +1283,14 @@ export default function TabsPage() {
           {editMode ? (
             <>
               <button
-                onClick={handleAIGroup}
+                onClick={versionInfo?.aiMode === 'real' ? handleAIGroup : handleBasicGroup}
                 disabled={loading}
                 className="button button-outline"
-                title="调用 AI 对当前标签重新智能分组"
+                title={versionInfo?.aiMode === 'real' ? '调用 AI 对当前标签重新智能分组' : '按域名对当前标签进行基础分组'}
               >
-                {loading ? 'AI 分组中...' : '🤖 AI智能分组'}
+                {loading
+                  ? (versionInfo?.aiMode === 'real' ? 'AI 分组中...' : '分组中...')
+                  : (versionInfo?.aiMode === 'real' ? '🤖 AI智能分组' : '🌐 基础分组')}
               </button>
               <button
                 onClick={handleOrganizeTabs}

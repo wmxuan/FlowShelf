@@ -3,21 +3,17 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect, useCallback } from 'react';
+import { useAiMode, useAiModeInvalidate } from '@/hooks/useAiMode';
+
+import { API_BASE } from '@/services/api';
 
 const ALL_NAV_ITEMS = [
-  { href: '/tabs', label: '🗂️ Tab 管理', alwaysShow: true },
-  { href: '/cards', label: '📚 卡片库', alwaysShow: false },
-  { href: '/toolbox', label: '🛠️ 工具箱', alwaysShow: false },
-  { href: '/learning', label: '📥 暂存区', alwaysShow: true },
-  { href: '/search', label: '🔍 全局搜索', alwaysShow: false },
+  { href: '/tabs', label: '🗂️ Tab 管理'},
+  { href: '/cards', label: '📚 卡片库'},
+  { href: '/toolbox', label: '🛠️ 工具箱'},
+  { href: '/learning', label: '📥 暂存区'},
+  { href: '/search', label: '🔍 搜索'},
 ];
-
-// API 基址（与 tabs/page.tsx 逻辑一致）
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || (
-  typeof window !== 'undefined' && window.location.port === '3000'
-    ? 'http://localhost:8972'
-    : ''
-);
 
 // 预设 AI Provider 配置
 const AI_PROVIDERS = [
@@ -30,7 +26,8 @@ const AI_PROVIDERS = [
 
 export default function Header() {
   const pathname = usePathname();
-  const [aiMode, setAiMode] = useState(false);
+  const { aiMode } = useAiMode();
+  const invalidateAiMode = useAiModeInvalidate();
   const [showKeyDialog, setShowKeyDialog] = useState(false);
   const [providerId, setProviderId] = useState('deepseek');
   const [apiKey, setApiKey] = useState('');
@@ -38,19 +35,6 @@ export default function Header() {
   const [model, setModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-
-  // 从后端 health 获取当前 AI 模式
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/health`);
-        if (res.ok) {
-          const data = await res.json();
-          setAiMode(data.ai_mode === 'real');
-        }
-      } catch { /* ignore */ }
-    })();
-  }, []);
 
   const handleToggleAiMode = useCallback(() => {
     if (aiMode) {
@@ -63,7 +47,7 @@ export default function Header() {
             body: JSON.stringify({ api_key: '' }),
           });
         } catch { /* ignore */ }
-        setAiMode(false);
+        await invalidateAiMode();
       })();
     } else {
       // 切换到 AI 模式：弹窗输入 key
@@ -113,8 +97,7 @@ export default function Header() {
         body: JSON.stringify({ api_key: apiKey.trim(), base_url: finalBaseUrl, model: finalModel }),
       });
       if (res.ok) {
-        const data = await res.json();
-        setAiMode(data.ai_mode === 'real');
+        await invalidateAiMode();
         setShowKeyDialog(false);
         setApiKey('');
         setBaseUrl('');
@@ -127,9 +110,9 @@ export default function Header() {
     } finally {
       setSaving(false);
     }
-  }, [apiKey, baseUrl, model, providerId]);
+  }, [apiKey, baseUrl, model, providerId, invalidateAiMode]);
 
-  const navItems = ALL_NAV_ITEMS.filter(item => aiMode || item.alwaysShow);
+  const navItems = ALL_NAV_ITEMS; // 基础模式也全显示，降级功能标注
 
   return (
     <>

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   FileText,
   Wrench,
@@ -8,7 +9,9 @@ import {
   Shuffle,
 } from 'lucide-react';
 import DeleteConfirmButton from '@/components/DeleteConfirmButton';
+import ConvertModal from '@/components/ConvertModal';
 import { learningApi } from '@/services/api';
+import { useAiMode } from '@/hooks/useAiMode';
 import type { LearningItem } from '@/types';
 import KnowledgeCard, { KnowledgeCardActions } from '@/components/cards/KnowledgeCard';
 import ToolCard, { ToolCardActions } from '@/components/cards/ToolCard';
@@ -23,88 +26,73 @@ import {
 
 type TabKey = 'unspecified' | 'article' | 'tool';
 
+const LEARNING_KEY = ['learning', 'items'] as const;
+
 export default function LearningPage() {
-  const [items, setItems] = useState<LearningItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const { aiMode } = useAiMode();
   const [error, setError] = useState('');
-  // key = `${id}` 或 `${id}-${overrideType}`
-  const [converting, setConverting] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<TabKey>('unspecified');
-  const [regeneratingId, setRegeneratingId] = useState<number | null>(null);
   const [selectedArticle, setSelectedArticle] = useState<KnowledgeCardData | null>(null);
   const [selectedTool, setSelectedTool] = useState<ToolCardData | null>(null);
+  // 转换弹窗
+  const [convertItem, setConvertItem] = useState<LearningItem | null>(null);
+  const [convertOverrideType, setConvertOverrideType] = useState<'article' | 'tool' | undefined>(undefined);
 
-  const loadItems = async (silent = false) => {
-    if (!silent) setLoading(true);
-    try {
+  // ============ 列表数据（useQuery） ============
+
+  const itemsQuery = useQuery({
+    queryKey: LEARNING_KEY,
+    queryFn: async (): Promise<LearningItem[]> => {
       const data = await learningApi.list();
       const safeData = (Array.isArray(data) ? data : []).map((item: LearningItem) => ({
         ...item,
         key_points: Array.isArray(item.key_points) ? item.key_points : [],
         ai_tags: Array.isArray(item.ai_tags) ? item.ai_tags : [],
       }));
-      setItems(safeData);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '加载失败');
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  };
+      return safeData;
+    },
+    // 有 is_ready=False 的条目时，每 3 秒轮询（AI 生成中）
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (data?.some((item: LearningItem) => !item.is_ready && !item.is_converted)) {
+        return 3000;
+      }
+      return false;
+    },
+  });
 
-  useEffect(() => {
-    loadItems();
-  }, []);
+  const items = itemsQuery.data ?? [];
+  const loading = itemsQuery.isLoading && !itemsQuery.isPlaceholderData;
 
-  // 如果有 AI 未就绪且类型已明确的条目，每 5 秒轮询一次
-  // unspecified 条目不会被后台 AI 处理，不必轮询（节省资源）
-  useEffect(() => {
-    const hasPending = items.some(
-      (i) =>
-        !i.is_ready &&
-        !i.is_converted &&
-        i.item_type !== 'unspecified'
-    );
-    if (!hasPending) return;
-    const timer = setTimeout(() => {
-      loadItems(true);
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, [items]);
+  // ============ 删除（useMutation） ============
 
-  const handleConvert = async (id: number, overrideType?: 'article' | 'tool') => {
-    const key = overrideType ? `${id}-${overrideType}` : `${id}`;
-    setConverting((prev) => ({ ...prev, [key]: true }));
-    try {
-      const item = items.find((i) => i.id === id);
-      if (!item) return;
-
-      const body: Record<string, unknown> = {};
-      if (overrideType) body.item_type = overrideType;
-      if (item.ai_summary) body.ai_summary = item.ai_summary;
-      if (item.key_points && item.key_points.length > 0) body.key_points = item.key_points;
-      if (item.ai_tags && item.ai_tags.length > 0) body.ai_tags = item.ai_tags;
-      if (item.tool_description) body.tool_description = item.tool_description;
-
-      await learningApi.convert(id, body as Parameters<typeof learningApi.convert>[1]);
-      loadItems();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '转换失败');
-    } finally {
-      setConverting((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-    }
-  };
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await learningApi.delete(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: LEARNING_KEY });
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : '删除失败');
+    },
+  });
 
   const handleDelete = async (id: number) => {
-    try {
-      await learningApi.delete(id);
-      loadItems();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '删除失败');
-    }
+    await deleteMutation.mutateAsync(id);
+  };
+
+  // ============ 手动刷新（仅刷新列表数据，不触发轮询等 AI 逻辑） ============
+
+  const loadItems = useCallback(async () => {
+    await itemsQuery.refetch();
+  }, [itemsQuery]);
+
+  /** 打开转换弹窗 */
+  const openConvertModal = (item: LearningItem, overrideType?: 'article' | 'tool') => {
+    setConvertItem(item);
+    setConvertOverrideType(overrideType);
   };
 
   const formatDate = (dateStr: string) => {
@@ -128,11 +116,7 @@ export default function LearningPage() {
         ? articleItems
         : toolItems;
 
-  const unspecifiedPendingCount = unspecifiedItems.filter((i) => !i.is_converted).length;
-  const articlePendingCount = articleItems.filter((i) => !i.is_ready && !i.is_converted).length;
-  const toolPendingCount = toolItems.filter((i) => !i.is_ready && !i.is_converted).length;
-
-  // ========== article 详情弹窗：编辑保存 ==========
+  // ========== article 详情弹窗：编辑保存（乐观更新） ==========
   const handleArticleUpdated = (updated: {
     id: number;
     source: 'learning' | 'cards';
@@ -143,8 +127,8 @@ export default function LearningPage() {
     ai_tags: string[];
     created_at: string;
   }) => {
-    setItems((prev) =>
-      prev.map((i) =>
+    queryClient.setQueryData<LearningItem[]>(LEARNING_KEY, (prev) =>
+      prev?.map((i) =>
         i.id === updated.id
           ? {
               ...i,
@@ -169,7 +153,7 @@ export default function LearningPage() {
     );
   };
 
-  // ========== tool 详情弹窗：编辑保存 ==========
+  // ========== tool 详情弹窗：编辑保存（乐观更新） ==========
   const handleToolUpdated = (updated: {
     id: number;
     source: 'learning' | 'toolbox';
@@ -181,8 +165,8 @@ export default function LearningPage() {
     visit_count?: number;
     last_visited_at?: string | null;
   }) => {
-    setItems((prev) =>
-      prev.map((i) =>
+    queryClient.setQueryData<LearningItem[]>(LEARNING_KEY, (prev) =>
+      prev?.map((i) =>
         i.id === updated.id
           ? {
               ...i,
@@ -199,24 +183,7 @@ export default function LearningPage() {
     );
   };
 
-  // ========== AI 重新生成（learning 用 enrich） ==========
-  const handleRegenerate = async (id: number) => {
-    setRegeneratingId(id);
-    try {
-      await learningApi.enrich(id);
-      await loadItems();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '重新生成失败');
-    } finally {
-      setRegeneratingId(null);
-    }
-  };
-
   const renderUnspecifiedCard = (item: LearningItem) => {
-    const articleKey = `${item.id}-article`;
-    const toolKey = `${item.id}-tool`;
-    const busyArticle = !!converting[articleKey];
-    const busyTool = !!converting[toolKey];
     let domain = '';
     try {
       domain = new URL(item.source_url).hostname;
@@ -242,10 +209,12 @@ export default function LearningPage() {
           {item.source_url}
         </a>
 
-        {/* 待分类提示：AI 暂未生成，等用户选择类型后同步生成 */}
+        {/* 待分类提示 */}
         <div className="rounded-lg bg-purple-50 border border-purple-200 px-3 py-2 mb-3">
           <div className="text-xs text-purple-700">
-            🗂️ 尚未选择归档类型，转正时 AI 会按所选类型同步生成内容
+            {aiMode
+              ? '🗂️ 尚未选择归档类型，转正时 AI 会按所选类型同步生成内容'
+              : '🗂️ 尚未选择归档类型，选择后可收藏到卡片库或工具箱'}
           </div>
         </div>
 
@@ -268,20 +237,18 @@ export default function LearningPage() {
             {!item.is_converted && (
               <>
                 <button
-                  onClick={() => handleConvert(item.id, 'article')}
-                  disabled={busyArticle || busyTool}
-                  className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  onClick={() => openConvertModal(item, 'article')}
+                  className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors"
                   title="以知识卡片形式转正"
                 >
-                  {busyArticle ? '...' : '📄 转为知识卡片'}
+                  {aiMode ? '📄 转为知识卡片' : '📄 收藏到卡片库'}
                 </button>
                 <button
-                  onClick={() => handleConvert(item.id, 'tool')}
-                  disabled={busyArticle || busyTool}
-                  className="text-xs px-3 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 transition-colors disabled:opacity-50"
-                  title="以工具形式转正"
+                  onClick={() => openConvertModal(item, 'tool')}
+                  className="text-xs px-3 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 transition-colors"
+                  title={aiMode ? '以工具形式转正' : '收藏到工具箱'}
                 >
-                  {busyTool ? '...' : '🔧 转为工具'}
+                  {aiMode ? '🔧 转为工具' : '🔧 收藏到工具箱'}
                 </button>
               </>
             )}
@@ -289,6 +256,7 @@ export default function LearningPage() {
               onConfirm={() => handleDelete(item.id)}
               buttonClassName="text-xs px-2 py-1 rounded border border-border hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
               buttonTitle="删除"
+              stopPropagation
               confirmText="确认删除这个条目吗？"
             >
               删除
@@ -333,7 +301,6 @@ export default function LearningPage() {
           icon={<Shuffle className="h-4 w-4" />}
           label="待分类"
           count={unspecifiedItems.length}
-          pending={unspecifiedPendingCount}
         />
         <TabButton
           active={activeTab === 'article'}
@@ -341,7 +308,6 @@ export default function LearningPage() {
           icon={<FileText className="h-4 w-4" />}
           label="知识卡片"
           count={articleItems.length}
-          pending={articlePendingCount}
         />
         <TabButton
           active={activeTab === 'tool'}
@@ -349,7 +315,6 @@ export default function LearningPage() {
           icon={<Wrench className="h-4 w-4" />}
           label="工具"
           count={toolItems.length}
-          pending={toolPendingCount}
         />
       </div>
 
@@ -397,35 +362,23 @@ export default function LearningPage() {
           {tabItems.map((item) => {
             const data = adaptLearningArticle(item);
             const isConverted = !!item.is_converted;
-            // AI 生成失败：is_ready=true 但 ai_summary 为空（后端 enrich 失败时标记 is_ready=true）
-            const isFailed = item.is_ready === true && !item.ai_summary;
             const actions: KnowledgeCardActions = {
               onView: () => setSelectedArticle(data),
-              // 仅失败时提供重新生成入口（卡片内嵌红色 chip）
-              ...(isFailed
-                ? {
-                    onRegenerate: () => handleRegenerate(item.id),
-                    isRegenerating: regeneratingId === item.id,
-                  }
-                : {}),
               onDelete: (id) => handleDelete(id),
               extraActions: !isConverted ? (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleConvert(item.id);
+                    openConvertModal(item);
                   }}
-                  disabled={!!converting[`${item.id}`]}
-                  className="text-xs px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                  title="转为正式卡片"
+                  className="text-xs px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                  title={aiMode ? '转为正式卡片' : '收藏到卡片库'}
                 >
-                  {converting[`${item.id}`] ? '转换中...' : '转为正式'}
+                  {aiMode ? '转为正式' : '收藏'}
                 </button>
               ) : null,
             };
-            return (
-              <KnowledgeCard key={item.id} data={data} actions={actions} />
-            );
+            return <KnowledgeCard key={item.id} data={data} actions={actions} />;
           })}
         </div>
       )}
@@ -436,16 +389,8 @@ export default function LearningPage() {
           {tabItems.map((item) => {
             const data = adaptLearningTool(item);
             const isConverted = !!item.is_converted;
-            // AI 生成失败：is_ready=true 但 tool_description 为空
-            const isFailed = item.is_ready === true && !item.tool_description;
             const actions: ToolCardActions = {
               onView: () => setSelectedTool(data),
-              ...(isFailed
-                ? {
-                    onRegenerate: () => handleRegenerate(item.id),
-                    isRegenerating: regeneratingId === item.id,
-                  }
-                : {}),
               onOpenExternal: () => {
                 // learning tool 未转正，不记录访问
               },
@@ -454,13 +399,12 @@ export default function LearningPage() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleConvert(item.id);
+                    openConvertModal(item);
                   }}
-                  disabled={!!converting[`${item.id}`]}
-                  className="text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                  title="转为正式工具"
+                  className="text-xs px-2 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                  title={aiMode ? '转为正式工具' : '收藏到工具箱'}
                 >
-                  {converting[`${item.id}`] ? '...' : '转为正式'}
+                  {aiMode ? '转为正式' : '收藏'}
                 </button>
               ) : null,
             };
@@ -469,36 +413,31 @@ export default function LearningPage() {
         </div>
       )}
 
-      {/* article 详情/编辑弹窗（仅失败时显示 AI 重新生成按钮） */}
+      {/* article 详情/编辑弹窗 */}
       <KnowledgeDetailModal
         data={selectedArticle}
         onClose={() => setSelectedArticle(null)}
         onUpdated={handleArticleUpdated}
-        onRegenerate={async (id) => {
-          await handleRegenerate(id);
-        }}
-        isFailed={
-          !!selectedArticle &&
-          selectedArticle.source === 'learning' &&
-          selectedArticle.is_ready === true &&
-          !selectedArticle.ai_summary
-        }
       />
 
-      {/* tool 详情/编辑弹窗（仅失败时显示 AI 重新生成按钮） */}
+      {/* tool 详情/编辑弹窗 */}
       <ToolDetailModal
         data={selectedTool}
         onClose={() => setSelectedTool(null)}
         onUpdated={handleToolUpdated}
-        onRegenerate={async (id) => {
-          await handleRegenerate(id);
+      />
+
+      {/* 转换弹窗：基础模式空表单 / AI模式AI生成+可编辑 */}
+      <ConvertModal
+        open={!!convertItem}
+        item={convertItem}
+        aiMode={aiMode}
+        initialTargetType={convertOverrideType}
+        onClose={() => {
+          setConvertItem(null);
+          setConvertOverrideType(undefined);
         }}
-        isFailed={
-          !!selectedTool &&
-          selectedTool.source === 'learning' &&
-          selectedTool.is_ready === true &&
-          !selectedTool.description
-        }
+        onConverted={() => loadItems()}
       />
     </div>
   );
@@ -512,10 +451,9 @@ interface TabButtonProps {
   icon: React.ReactNode;
   label: string;
   count: number;
-  pending?: number;
 }
 
-function TabButton({ active, onClick, icon, label, count, pending }: TabButtonProps) {
+function TabButton({ active, onClick, icon, label, count }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
@@ -528,11 +466,6 @@ function TabButton({ active, onClick, icon, label, count, pending }: TabButtonPr
       {icon}
       <span>{label}</span>
       <span className="text-xs text-muted-foreground">({count})</span>
-      {pending && pending > 0 ? (
-        <span className="inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 px-1.5 py-0.5 text-xs font-medium">
-          {pending}
-        </span>
-      ) : null}
     </button>
   );
 }

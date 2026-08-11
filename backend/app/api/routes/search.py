@@ -18,16 +18,16 @@ async def semantic_search(
     q: str = Query(..., min_length=1, description="搜索查询"),
     type: str = Query("all", description="搜索类型：all | cards | tools"),
     limit: int = Query(20, ge=1, le=100),
+    semantic: bool = Query(True, description="是否启用语义检索（基础模式传 false）"),
 ):
     """
-    语义搜索
-
-    用自然语言描述你要找的内容，AI 会进行语义匹配
+    搜索（语义 + 关键词混合 / 纯关键词）
     """
     service = SearchService(db, ai_provider)
-    results, total = await service.semantic_search(
+    results, total, semantic_used = await service.semantic_search(
         query=q,
         search_type=type,
         limit=limit,
+        use_semantic=semantic,
     )
-    return SearchResponse(results=results, total=total, query=q)
+    return SearchResponse(results=results, total=total, query=q, semantic_used=semantic_used)

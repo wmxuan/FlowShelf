@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { FileText, Search, Plus } from 'lucide-react';
 import { cardsApi } from '@/services/api';
+import { useAiMode } from '@/hooks/useAiMode';
 import type { Card, SearchResult, TagCount } from '@/types';
 import AddItemModal from '@/components/AddItemModal';
 import SearchBar, { SearchStatus } from '@/components/SearchBar';
@@ -32,13 +33,17 @@ export default function CardsPage() {
   const [selectedCard, setSelectedCard] = useState<KnowledgeCardData | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
 
+  const { aiMode } = useAiMode();
+
   const list = useListPage<Card>({
+    queryKeyPrefix: 'cards',
     fetchList: (opts) =>
       cardsApi.list({ limit: 50, tag: opts.tag, ...(opts.query ? { query: opts.query } : {}) }),
     fetchTags: cardsApi.tags as () => Promise<TagCount[]>,
     adaptSearchResult: adaptSearchResultToCard,
     deleteItem: async (id) => { await cardsApi.delete(id); },
     searchType: 'cards',
+    useSemantic: aiMode,
   });
 
   const {

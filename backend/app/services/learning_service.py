@@ -3,26 +3,30 @@
 
 核心流程：
 1. 快速保存：仅 URL + 标题入库，< 500ms 返回给扩展
-2. 后台异步补全：通过 asyncio.create_task 触发 AI 生成摘要/标签
-3. Web 应用查看：is_ready=True 时展示完整内容，否则展示"AI 生成中"
-4. 转换：用户在 Web 应用确认后转为卡片/工具
+2. 后台 AI 补全：AI 模式下保存后自动触发 AI 生成（摘要/标签/关键观点）
+   - is_ready=False → AI 生成中
+   - is_ready=True + AI 内容 → AI 生成成功
+   - is_ready=True + AI 内容为空 → AI 生成失败或基础模式
+3. 按需 AI 生成：用户在 ConvertModal 中可重新触发 AI 生成（覆盖后台结果）
+4. 转换：前端确认内容后，调用 convert_item 做纯数据搬迁（不触发 AI）
 """
 
 from app.core.logging import get_logger
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-import asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.db.models.models import LearningItem, Card, Tool
-from app.db.schemas.schemas import LearningItemCreate
+from app.db.schemas.schemas import (
+    LearningItemCreate,
+    LearningAiGenerateArticleResponse,
+    LearningAiGenerateToolResponse,
+)
 from app.providers.base import BaseAIProvider
-from app.core.database import engine
 from app.services.tag_service import get_candidate_tags, normalize_tags
-from app.services.card_service import CardService
-from app.services.tool_service import ToolService
 
 log = get_logger(__name__)
 
@@ -36,24 +40,20 @@ class LearningService:
 
     async def create_item(self, data: LearningItemCreate) -> LearningItem:
         """
-        快速保存待学习项（轻量），然后后台异步触发 AI 补全。
+        快速保存待学习项（轻量）。
 
         跨入口去重（60s 内同 URL 不重复创建）：覆盖浏览器 ⭐️、扩展 popup、Bookmarklet
         三条链路，避免「先点 popup 再点 ⭐️」产生两条看起来像丢失的重复记录。
         匹配命中条件：同一 source_url，is_converted=False，创建时间 < 60s；
-        此时直接返回已存在条目（允许 item_type 不同，优先返回未转化项，避免
-        用户在待分类 tab 找不到自己刚 ⭐️ 的 URL 以为丢了）。
+        此时直接返回已存在条目。
 
-        当 item_type == "unspecified" 时（一键入口：书签/bookmarklet），因未知用户意图，
-        跳过后台 AI 补全，**不**提前生成错误类型的内容；等用户在暂存区选择类型后，
-        convert_item 会同步生成正确类型的内容。
+        AI 模式：is_ready=False，后台自动触发 AI 补全，完成后标记 is_ready=True。
+        基础模式：is_ready=True，无 AI 生成，用户手动填写。
 
         Returns:
-            LearningItem（is_ready=False，AI 内容尚未补全）
+            LearningItem
         """
         # --------- 跨入口 60s 同 URL 去重 ---------
-        # 注意：DB created_at 用 server_default=func.now()（SQLite CURRENT_TIMESTAMP），是 UTC 时间。
-        # 这里必须同样用 UTC，否则 Asia/Shanghai (UTC+8) 会差 8 小时导致 WHERE 永远不命中。
         sixty_sec_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
             seconds=60
         )
@@ -72,145 +72,157 @@ class LearningService:
                 existing.id,
                 existing.item_type,
             )
-            # 如果新请求带了 item_type，比现有 "unspecified" 更明确 → 升级类型保留（给用户明确感）
+            # 如果新请求带了 item_type，比现有 "unspecified" 更明确 → 升级类型保留
             if existing.item_type == "unspecified" and data.item_type in (
                 "article",
                 "tool",
             ):
                 existing.item_type = data.item_type
-                # 升级后若还没启动 AI 补全，启动一次
-                if data.content and not existing.is_ready:
-                    asyncio.create_task(
-                        self._ai_enrich(existing.id, data.content, data.item_type)
-                    )
                 await self.db.commit()
                 await self.db.refresh(existing)
             return existing
 
+        is_ai_mode = not self.ai_provider.is_demo
         item = LearningItem(
             source_url=data.source_url,
             title=data.title,
             item_type=data.item_type,
             content=data.content,
-            is_ready=False,
+            is_ready=not is_ai_mode,  # AI 模式 False（生成中），基础模式 True
         )
         self.db.add(item)
         await self.db.commit()
         await self.db.refresh(item)
 
-        # 后台异步 AI 补全（不阻塞响应）
-        content_text = data.content or ""
-        if content_text and data.item_type != "unspecified":
-            # 用 create_task 异步执行，不等待结果
-            asyncio.create_task(self._ai_enrich(item.id, content_text, data.item_type))
-        elif data.item_type == "unspecified":
-            log.info(
-                "待学习项 %d item_type=unspecified，跳过后台 AI 补全（等用户在暂存区选择类型后再生成）",
-                item.id,
-            )
-        else:
-            log.info(
-                "待学习项 %d 无正文，跳过 AI 补全（将在用户打开 Web 应用时触发）",
-                item.id,
-            )
+        # AI 模式：后台触发 AI 补全（不阻塞响应）
+        if is_ai_mode and data.content:
+            asyncio.create_task(self._background_enrich(item.id))
 
         return item
 
-    async def _ai_enrich(self, item_id: int, content: str, item_type: str) -> None:
-        """后台 AI 补全：为待学习项生成摘要/标签/描述。
+    async def ai_generate(
+        self, item_id: int, item_type: str
+    ) -> LearningAiGenerateArticleResponse | LearningAiGenerateToolResponse:
+        """按需 AI 生成（前端弹窗调用），返回生成结果但不落库。
 
-        使用独立数据库会话，不依赖请求生命周期。
+        AI 模式：调用真实 AI，返回 Pydantic 校验后的结果。
+        基础模式：直接返回空字段，前端展示空表单供用户手填。
         """
-        # 创建独立会话用于后台任务
-        session_maker = async_sessionmaker(
-            engine, class_=AsyncSession, expire_on_commit=False
-        )
-        async with session_maker() as bg_db:
-            try:
-                result = await self._do_ai_enrich(bg_db, item_id, content, item_type)
-                if result:
-                    await bg_db.commit()
-                    log.info("待学习项 %d AI 补全完成", item_id)
-            except Exception as exc:
-                # 失败时设置 is_ready=True，标记"已尝试"，避免前端误报为"生成中"
-                # 前端通过 is_ready=true && AI 内容为空 判定为"生成失败"，显示重新生成按钮
-                log.error("待学习项 %d AI 补全失败：%s", item_id, exc)
-                try:
-                    await bg_db.execute(
-                        update(LearningItem)
-                        .where(LearningItem.id == item_id)
-                        .values(is_ready=True, updated_at=datetime.now())
-                    )
-                    await bg_db.commit()
-                except Exception as inner_exc:
-                    log.error("待学习项 %d 标记失败状态时出错：%s", item_id, inner_exc)
-
-    async def _do_ai_enrich(
-        self, db: AsyncSession, item_id: int, content: str, item_type: str
-    ) -> Optional[LearningItem]:
-        """实际执行 AI 补全的内部方法"""
-        from sqlalchemy import select as sa_select
-
-        result = await db.execute(
-            sa_select(LearningItem).where(LearningItem.id == item_id)
-        )
-        item = result.scalar_one_or_none()
+        item = await self._get_item(item_id)
         if not item:
-            return None
+            raise ValueError("待学习项不存在")
 
-        # 候选标签从对应内容池聚合：article 沉淀为 cards，tool 沉淀为 tools
-        # （不能直接 item_type + "s"，否则 article 会得到 "articles" 这个不存在的表名）
+        content = item.content or ""
+        if not content:
+            raise ValueError("无正文可用于 AI 生成")
+
+        # 基础模式：返回空字段，前端展示空表单
+        if self.ai_provider.is_demo:
+            if item_type == "article":
+                return LearningAiGenerateArticleResponse()
+            else:
+                return LearningAiGenerateToolResponse()
+
+        # AI 模式：真实生成
         tag_table = "cards" if item_type == "article" else "tools"
-        candidates = await get_candidate_tags(db, tag_table, top_n=30)
+        candidates = await get_candidate_tags(self.db, tag_table, top_n=30)
 
         if item_type == "article":
-            ai_result = await self.ai_provider.generate_card(
+            result = await self.ai_provider.generate_card(
                 item.source_url, content, candidate_tags=candidates
             )
-            normalized_tags = normalize_tags(ai_result["tags"], candidates)
-            embed_text = "\n".join(
-                [item.title, ai_result["summary"], *ai_result["key_points"]]
-            )
-            embedding = await self.ai_provider.safe_generate_embedding(embed_text)
-
-            stmt = (
-                update(LearningItem)
-                .where(LearningItem.id == item_id)
-                .values(
-                    ai_summary=ai_result["summary"],
-                    key_points=ai_result["key_points"],
-                    ai_tags=normalized_tags,
-                    embedding=embedding,
-                    is_ready=True,
-                    updated_at=datetime.now(),
-                )
+            return LearningAiGenerateArticleResponse(
+                summary=result["summary"],
+                key_points=result["key_points"],
+                tags=normalize_tags(result["tags"], candidates),
             )
         else:
-            ai_result = await self.ai_provider.generate_tool(
+            result = await self.ai_provider.generate_tool(
                 item.source_url, content, candidate_tags=candidates
             )
-            normalized_tags = normalize_tags(ai_result["tags"], candidates)
-            embed_text = " ".join(
-                [item.title, ai_result.get("description", ""), *normalized_tags]
+            return LearningAiGenerateToolResponse(
+                description=result.get("description", ""),
+                tags=normalize_tags(result["tags"], candidates),
             )
-            embedding = await self.ai_provider.safe_generate_embedding(embed_text)
 
-            stmt = (
-                update(LearningItem)
-                .where(LearningItem.id == item_id)
-                .values(
-                    tool_description=ai_result.get("description", ""),
-                    ai_tags=normalized_tags,
-                    embedding=embedding,
-                    is_ready=True,
-                    updated_at=datetime.now(),
+    async def _background_enrich(self, item_id: int) -> None:
+        """后台 AI 补全（asyncio.create_task 调用，需独立 DB session）。
+
+        成功：写入 ai_summary / key_points / ai_tags / tool_description，is_ready=True。
+        失败：is_ready=True（防止永久卡在生成中），AI 字段保持空，前端显示"AI 生成失败"。
+        """
+        from app.core.database import async_session_maker
+        from app.core.provider_manager import get_provider_manager
+
+        try:
+            # 通过 ProviderManager 获取当前配置的 AI Provider（含 embedding）
+            # 确保与请求处理使用同一实例，避免 DemoAIProvider 问题
+            ai_provider = get_provider_manager().get_provider()
+
+            async with async_session_maker() as session:
+                item = await session.execute(
+                    select(LearningItem).where(LearningItem.id == item_id)
                 )
-            )
+                item_obj = item.scalar_one_or_none()
+                if not item_obj or item_obj.is_converted:
+                    return
 
-        await db.execute(stmt)
-        await db.commit()
-        await db.refresh(item)
-        return item
+                content = item_obj.content or ""
+                if not content:
+                    # 无正文，直接标记 ready（无法生成）
+                    item_obj.is_ready = True
+                    await session.commit()
+                    return
+
+                item_type = item_obj.item_type
+                # unspecified 类型无法生成，等待用户选择类型后手动触发
+                if item_type == "unspecified":
+                    item_obj.is_ready = True
+                    await session.commit()
+                    return
+                tag_table = "cards" if item_type == "article" else "tools"
+                candidates = await get_candidate_tags(session, tag_table, top_n=30)
+
+                if item_type == "article":
+                    result = await ai_provider.generate_card(
+                        item_obj.source_url, content, candidate_tags=candidates
+                    )
+                    item_obj.ai_summary = result.get("summary", "")
+                    item_obj.key_points = result.get("key_points", [])
+                    item_obj.ai_tags = normalize_tags(
+                        result.get("tags", []), candidates
+                    )
+                else:
+                    result = await ai_provider.generate_tool(
+                        item_obj.source_url, content, candidate_tags=candidates
+                    )
+                    item_obj.tool_description = result.get("description", "")
+                    item_obj.ai_tags = normalize_tags(
+                        result.get("tags", []), candidates
+                    )
+
+                item_obj.is_ready = True
+                await session.commit()
+                log.info("后台 AI 补全完成：item #%s (type=%s)", item_id, item_type)
+
+        except Exception as exc:
+            log.warning("后台 AI 补全失败：item #%s，%s", item_id, exc)
+            # 失败也标记 ready，防止永久卡在"生成中"
+            try:
+                async with async_session_maker() as session:
+                    item = await session.execute(
+                        select(LearningItem).where(LearningItem.id == item_id)
+                    )
+                    item_obj = item.scalar_one_or_none()
+                    if item_obj and not item_obj.is_ready:
+                        item_obj.is_ready = True
+                        await session.commit()
+            except Exception as inner_exc:
+                log.error(
+                    "后台 AI 补全失败后标记 ready 也失败：item #%s，%s",
+                    item_id,
+                    inner_exc,
+                )
 
     async def _get_item(self, item_id: int) -> Optional[LearningItem]:
         result = await self.db.execute(
@@ -231,7 +243,32 @@ class LearningService:
         query = query.order_by(LearningItem.created_at.desc())
         query = query.offset(skip).limit(limit)
         result = await self.db.execute(query)
-        return result.scalars().all()
+        items = result.scalars().all()
+
+        # 兼容：is_ready=False 超过 10 分钟的条目视为"后台任务丢失"，
+        # 自动修正为 True，避免永久卡在"生成中"（正常 AI 生成应在数十秒内完成）
+        ten_min_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            minutes=10
+        )
+        stale = [
+            i
+            for i in items
+            if not i.is_ready and not i.is_converted and i.created_at < ten_min_ago
+        ]
+        if stale:
+            from sqlalchemy import update as sa_update
+
+            stale_ids = [i.id for i in stale]
+            await self.db.execute(
+                sa_update(LearningItem)
+                .where(LearningItem.id.in_(stale_ids))
+                .values(is_ready=True)
+            )
+            await self.db.commit()
+            for i in stale:
+                i.is_ready = True
+
+        return items
 
     async def get_item(self, item_id: int) -> Optional[LearningItem]:
         return await self._get_item(item_id)
@@ -242,74 +279,48 @@ class LearningService:
         overwrite_data: Optional[dict] = None,
     ) -> Optional[LearningItem]:
         """
-        将待学习项转换为卡片或工具。
+        将待学习项转换为卡片/工具（纯数据搬迁，不触发 AI）。
 
-        1. 先应用用户覆盖（例如从未指定类型的条目 → 指定为 article/tool）。
-        2. 按最终类型检查 AI 内容是否齐全：
-           - article：需要 ai_summary + is_ready
-           - tool：需要 tool_description + is_ready
-           缺失则同步补全，使用最终类型对应的 AI 模板。
-        3. 按最终类型写入 cards 或 tools 表。
-
-        转换后 is_converted=True，记录 converted_id。
+        前端已通过 ConvertModal 确认内容，此处直接写入 cards/tools 表。
         """
         item = await self._get_item(item_id)
         if not item:
             return None
 
-        # （1）先应用用户覆盖数据（包含 item_type/标题/标签等）
+        # 应用用户确认的数据（注意：ai_tags 字段名含 "ai_" 前缀，
+        # 基础模式下实际为用户手填标签，但为保持 DB 列名一致性不做区分）
         if overwrite_data:
             for key, value in overwrite_data.items():
                 if value is not None and hasattr(item, key):
                     setattr(item, key, value)
 
-        # 最终类型必须是 article 或 tool
         if item.item_type not in ("article", "tool"):
             raise ValueError(
                 f"转换前必须指定类型（article 或 tool），当前 item_type={item.item_type!r}"
             )
 
-        # （2）按最终类型判断 AI 内容是否就绪；缺失则同步补全
-        needs_enrich = False
-        if not item.is_ready:
-            needs_enrich = True
-        elif item.item_type == "article" and not item.ai_summary:
-            needs_enrich = True
-        elif item.item_type == "tool" and not item.tool_description:
-            needs_enrich = True
+        # 生成 embedding（如果 AI 模式且有内容）
+        embedding = None
+        if not self.ai_provider.is_demo:
+            try:
+                if item.item_type == "article" and item.ai_summary:
+                    embed_text = "\n".join(
+                        [item.title, item.ai_summary, *(item.key_points or [])]
+                    )
+                    embedding = await self.ai_provider.safe_generate_embedding(
+                        embed_text
+                    )
+                elif item.item_type == "tool" and item.tool_description:
+                    embed_text = " ".join(
+                        [item.title, item.tool_description, *(item.ai_tags or [])]
+                    )
+                    embedding = await self.ai_provider.safe_generate_embedding(
+                        embed_text
+                    )
+            except Exception as exc:
+                log.warning("embedding 生成失败（非阻塞）：%s", exc)
 
-        if needs_enrich:
-            stored_content = item.content or ""
-            if not stored_content:
-                raise ValueError(
-                    "AI 内容尚未生成，且无存储正文可用于补全。请稍后再试或手动重新生成。"
-                )
-            log.info(
-                "待学习项 %d 按类型 %s 同步补全 AI 内容...",
-                item_id,
-                item.item_type,
-            )
-            # 先提交当前会话的 overwrite 修改（结束事务）。
-            # 否则 _ai_enrich 用独立 bg_db 会话 commit 的 AI 内容对 self.db
-            # 当前事务不可见（SQLite 快照隔离），导致后续 _get_item 读到的
-            # ai_summary 仍为旧值 → 写入 cards 时为空字符串。
-            await self.db.commit()
-            await self._ai_enrich(item.id, stored_content, item.item_type)
-            # _ai_enrich 在独立 bg_db 会话中已 commit；但 self.db 的 identity map
-            # 缓存了旧 item 对象（expire_on_commit=False 不会自动失效），SELECT 会
-            # 返回缓存对象而不刷新属性。必须 expire_all 强制下次查询从 DB 重新加载。
-            self.db.expire_all()
-            item = await self._get_item(item_id)
-            if not item:
-                return None
-            # 校验 AI 补全确实成功（_ai_enrich 内部 try/except 会吞掉 AI 异常，
-            # 这里兜底防止空内容落库到 cards/tools）
-            if item.item_type == "article" and not item.ai_summary:
-                raise ValueError("AI 摘要生成失败，请稍后重试或在卡片中手动填写摘要。")
-            if item.item_type == "tool" and not item.tool_description:
-                raise ValueError("AI 工具描述生成失败，请稍后重试或手动填写描述。")
-
-        # （3）转换为卡片或工具（按最终类型分支）
+        # 写入目标表
         if item.item_type == "article":
             card = Card(
                 source_url=item.source_url,
@@ -318,7 +329,7 @@ class LearningService:
                 key_points=item.key_points or [],
                 ai_tags=item.ai_tags or [],
                 source_type="article",
-                embedding=item.embedding or [],
+                embedding=embedding,
                 read_at=datetime.now(),
             )
             self.db.add(card)
@@ -332,7 +343,7 @@ class LearningService:
                 title=item.title,
                 ai_tags=item.ai_tags or [],
                 description=item.tool_description,
-                embedding=item.embedding or [],
+                embedding=embedding,
             )
             self.db.add(tool)
             await self.db.commit()
@@ -368,17 +379,3 @@ class LearningService:
         await self.db.commit()
         await self.db.refresh(item)
         return item
-
-    async def trigger_enrich(
-        self, item_id: int, content: str = ""
-    ) -> Optional[LearningItem]:
-        """手动触发 AI 补全（用户在 Web 应用点击"重新生成"时调用）"""
-        item = await self._get_item(item_id)
-        if not item:
-            return None
-        # 优先用传入的 content，其次用存储的 content
-        actual_content = content or item.content or ""
-        if not actual_content:
-            raise ValueError("无正文可用于 AI 补全")
-        await self._ai_enrich(item_id, actual_content, item.item_type)
-        return await self._get_item(item_id)

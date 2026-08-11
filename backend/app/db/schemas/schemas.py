@@ -162,6 +162,7 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
     total: int
     query: str
+    semantic_used: bool = True
 
 
 # ============ AI 相关 ============
@@ -303,6 +304,27 @@ class LearningItemUpdateRequest(BaseModel):
     key_points: Optional[List[str]] = None
     ai_tags: Optional[List[str]] = None
     tool_description: Optional[str] = None
+
+
+class LearningAiGenerateRequest(BaseModel):
+    """AI 生成请求（转换弹窗调用）"""
+
+    item_type: str = Field(..., description="目标类型：article | tool")
+
+
+class LearningAiGenerateArticleResponse(BaseModel):
+    """article AI 生成响应"""
+
+    summary: str = ""
+    key_points: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+
+
+class LearningAiGenerateToolResponse(BaseModel):
+    """tool AI 生成响应"""
+
+    description: str = ""
+    tags: List[str] = Field(default_factory=list)
 
 
 # ============ Tab 管理相关 ============

@@ -213,17 +213,20 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
   }
 
   // 防抖：3 秒内相同 URL 不重复触发（Chrome 同步多设备/多窗口重复事件）
+  // 使用归一化 URL 作为 key，容忍末尾斜杠差异
   const now = Date.now();
-  const lastEventTime = recentBookmarkUrls.get(url);
+  const dedupKey = url.replace(/\/+$/, "");
+  const lastEventTime = recentBookmarkUrls.get(dedupKey);
   if (lastEventTime && now - lastEventTime < DEDUP_WINDOW_MS) {
     console.log("[FlowShelf] Duplicate bookmark event, skipping");
     return;
   }
-  recentBookmarkUrls.set(url, now);
-  setTimeout(() => recentBookmarkUrls.delete(url), DEDUP_WINDOW_MS);
+  recentBookmarkUrls.set(dedupKey, now);
+  setTimeout(() => recentBookmarkUrls.delete(dedupKey), DEDUP_WINDOW_MS);
 
   // 暂存区去重：60 秒内这条 URL 已经成功写入过暂存区（不管是 ⭐️ 还是 popup），就不再重复同步
-  const lastSavedTime = recentlySavedLearningUrls.get(url);
+  const savedDedupKey = dedupKey; // 复用归一化 URL
+  const lastSavedTime = recentlySavedLearningUrls.get(savedDedupKey);
   if (lastSavedTime && now - lastSavedTime < RECENT_SAVED_WINDOW_MS) {
     console.log("[FlowShelf] URL recently saved to learning, skip:", url);
     return;
@@ -232,9 +235,9 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
   // 直接同步到 FlowShelf 暂存区（无需二次确认）
   try {
     await syncBookmarkToFlowShelf(url, bookmark.title || url);
-    recentlySavedLearningUrls.set(url, Date.now());
+    recentlySavedLearningUrls.set(savedDedupKey, Date.now());
     setTimeout(
-      () => recentlySavedLearningUrls.delete(url),
+      () => recentlySavedLearningUrls.delete(savedDedupKey),
       RECENT_SAVED_WINDOW_MS
     );
   } catch (err) {
@@ -249,13 +252,18 @@ async function syncBookmarkToFlowShelf(url: string, title: string): Promise<void
   // 跨窗口定位刚收藏的 Tab：Service Worker 中 currentWindow 不可靠
   // （指向 SW 所在的"窗口"概念，非用户操作窗口），导致取不到对应 tab → content 为空
   // → create_item 跳过 AI 补全 → 条目永久 is_ready=False（用户感知"失效"）。
-  // 改为查询所有 tab 后按 URL 精确匹配。
+  // 改为查询所有 tab 后按 URL 模糊匹配（容忍末尾斜杠差异）。
   const allTabs = await chrome.tabs.query({});
-  const targetTab = allTabs.find((t) => t.url === url);
+  const normalizeUrl = (u: string) => u.replace(/\/+$/, ""); // 去掉末尾斜杠
+  const targetTab = allTabs.find(
+    (t) => t.url && normalizeUrl(t.url) === normalizeUrl(url)
+  );
 
   let content = "";
   if (targetTab?.id) {
     try {
+      // 先验证 tab 仍然存在（用户可能在点击⭐后快速关闭了页面）
+      await chrome.tabs.get(targetTab.id);
       const [result] = await chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
         func: () => {
@@ -267,6 +275,7 @@ async function syncBookmarkToFlowShelf(url: string, title: string): Promise<void
       content = (result?.result as string) || "";
     } catch (err) {
       console.warn("[FlowShelf] Content extraction failed:", err);
+      // tab 已关闭或权限不足，content 留空，收藏仍继续
     }
   }
 
@@ -482,8 +491,9 @@ async function handleBridgeAction(
         : null;
     }
     case "groupTabs": {
-      // 「一键整理」：把所有窗口的标签聚合到当前窗口，按 AI 分组创建
-      // Chrome 原生标签群组，最后关闭变空的窗口。
+      // 「一键整理」：按 AI 分组创建 Chrome 原生标签群组。
+      // 分配策略：单窗口最多 MAX_TABS_PER_WINDOW 个 tab，
+      // 超出时新开窗口；单个分组超限时拆分到多个窗口。
       const groups = payload.groups as {
         name: string;
         tabIds: number[];
@@ -492,7 +502,9 @@ async function handleBridgeAction(
         return { success: false, error: "groups required" };
       }
 
-      // Step 1: 获取当前窗口（最后聚焦的窗口，SW 中比 getCurrent 更可靠）
+      const MAX_TABS_PER_WINDOW = 10;
+
+      // Step 1: 获取当前窗口（最后聚焦的窗口）
       const currentWindow = await chrome.windows.getLastFocused();
       const currentWindowId = currentWindow.id!;
 
@@ -505,7 +517,7 @@ async function handleBridgeAction(
         }
       }
 
-      // Step 3: 先解散所有窗口的所有现有群组（用户选择"先全部解散再重整"）
+      // Step 3: 先解散所有窗口的所有现有群组
       const allTabIds = allTabs
         .map((t) => t.id)
         .filter((id): id is number => id != null);
@@ -517,7 +529,77 @@ async function handleBridgeAction(
         }
       }
 
-      // Step 4: 颜色循环（避开 grey，grey 留给未命名组）
+      // Step 4: 过滤有效分组（去除已关闭的 tab）
+      const validGroups = groups
+        .map((g) => ({
+          name: g.name,
+          tabIds: (g.tabIds || []).filter((id) => tabWindowMap.has(id)),
+        }))
+        .filter((g) => g.tabIds.length > 0);
+
+      // Step 5: 计算窗口分配方案
+      // 每个 slot = { windowId, groupChunks: [{ name, tabIds, groupIndex }] }
+      // groupChunks 允许单个分组拆分到多个窗口
+      type GroupChunk = {
+        name: string;
+        tabIds: number[];
+        groupIndex: number;
+      };
+      type WindowSlot = {
+        windowId: number;
+        groupChunks: GroupChunk[];
+        tabCount: number;
+      };
+
+      const windowSlots: WindowSlot[] = [
+        { windowId: currentWindowId, groupChunks: [], tabCount: 0 },
+      ];
+
+      for (let gi = 0; gi < validGroups.length; gi++) {
+        const { name, tabIds } = validGroups[gi];
+        let remaining = [...tabIds];
+
+        while (remaining.length > 0) {
+          let slot = windowSlots[windowSlots.length - 1];
+          const available = MAX_TABS_PER_WINDOW - slot.tabCount;
+
+          if (available <= 0) {
+            // 当前窗口已满，新建窗口（占位 ID，后续替换）
+            slot = {
+              windowId: -1,
+              groupChunks: [],
+              tabCount: 0,
+            };
+            windowSlots.push(slot);
+            continue; // 重新计算 available
+          }
+
+          const chunk = remaining.splice(0, available);
+          slot.groupChunks.push({ name, tabIds: chunk, groupIndex: gi });
+          slot.tabCount += chunk.length;
+        }
+      }
+
+      // Step 6: 为 windowId=-1 的 slot 创建真实窗口
+      // 用第一个 chunk 的第一个 tab 作为种子，避免 chrome.windows.create 产生空白新标签页
+      for (const slot of windowSlots) {
+        if (slot.windowId === -1) {
+          const firstChunk = slot.groupChunks[0];
+          const seedTabId = firstChunk?.tabIds[0]; // 不移除，保留在 chunk 中以参与建组
+          if (seedTabId != null) {
+            const newWin = await chrome.windows.create({ tabId: seedTabId, focused: false });
+            slot.windowId = newWin.id!;
+            // 更新映射，让 Step 8 知道种子 tab 已在新窗口中，无需再 move
+            tabWindowMap.set(seedTabId, newWin.id!);
+          } else {
+            // 无 tab 可用（不应发生），回退到空白窗口
+            const newWin = await chrome.windows.create({ focused: false });
+            slot.windowId = newWin.id!;
+          }
+        }
+      }
+
+      // Step 7: 颜色循环
       const COLORS: chrome.tabGroups.ColorEnum[] = [
         "blue",
         "cyan",
@@ -529,7 +611,7 @@ async function handleBridgeAction(
         "orange",
       ];
 
-      // Step 5: 按 AI 分组逐组处理——把不在当前窗口的 tab 移过来，统一建组
+      // Step 8: 移动 tab 到目标窗口 + 创建群组
       const results: {
         name: string;
         windowId: number;
@@ -537,51 +619,71 @@ async function handleBridgeAction(
         tabCount: number;
       }[] = [];
 
-      for (let gi = 0; gi < groups.length; gi++) {
-        const { name, tabIds } = groups[gi];
-        if (!tabIds || tabIds.length === 0) continue;
+      for (const slot of windowSlots) {
+        for (const chunk of slot.groupChunks) {
+          // 把不在目标窗口的 tab 移过去
+          const tabsToMove = chunk.tabIds.filter(
+            (id) => tabWindowMap.get(id) !== slot.windowId
+          );
+          if (tabsToMove.length > 0) {
+            try {
+              await chrome.tabs.move(tabsToMove, {
+                windowId: slot.windowId,
+                index: -1,
+              });
+            } catch (err) {
+              console.warn("[FlowShelf BG] move tabs failed:", err);
+            }
+          }
 
-        // 过滤掉已关闭的 tab
-        const validTabIds = tabIds.filter((id) => tabWindowMap.has(id));
-        if (validTabIds.length === 0) continue;
-
-        // 把不在当前窗口的 tab 移到当前窗口末尾
-        const tabsToMove = validTabIds.filter(
-          (id) => tabWindowMap.get(id) !== currentWindowId
-        );
-        if (tabsToMove.length > 0) {
+          // 创建群组
           try {
-            await chrome.tabs.move(tabsToMove, {
-              windowId: currentWindowId,
-              index: -1, // 移到末尾，避免打乱已有顺序
+            const groupId = await chrome.tabs.group({
+              tabIds: chunk.tabIds,
+              createProperties: { windowId: slot.windowId },
+            });
+            await chrome.tabGroups.update(groupId, {
+              title: chunk.name,
+              color: COLORS[chunk.groupIndex % COLORS.length],
+            });
+            results.push({
+              name: chunk.name,
+              windowId: slot.windowId,
+              groupId,
+              tabCount: chunk.tabIds.length,
             });
           } catch (err) {
-            console.warn("[FlowShelf BG] move tabs to current window failed:", err);
+            console.warn("[FlowShelf BG] create group failed:", err);
           }
         }
-
-        // 在当前窗口创建群组
-        const groupId = await chrome.tabs.group({
-          tabIds: validTabIds,
-          createProperties: { windowId: currentWindowId },
-        });
-        await chrome.tabGroups.update(groupId, {
-          title: name,
-          color: COLORS[gi % COLORS.length],
-        });
-        results.push({
-          name,
-          windowId: currentWindowId,
-          groupId,
-          tabCount: validTabIds.length,
-        });
       }
 
-      // Step 6: 关闭变空的普通窗口（保留当前窗口和特殊窗口如 devtools）
+      // Step 9: 清理新建窗口中的多余空白 tab（chrome.windows.create 会自带一个 about:blank）
+      for (const slot of windowSlots) {
+        if (slot.windowId === currentWindowId) continue;
+        try {
+          const tabsInWin = await chrome.tabs.query({ windowId: slot.windowId });
+          for (const t of tabsInWin) {
+            // 空白 tab 且不在任何分组 chunk 中
+            if (t.id && (t.url === "chrome://newtab/" || t.url === "about:blank")) {
+              const usedInChunk = slot.groupChunks.some((c) => c.tabIds.includes(t.id!));
+              if (!usedInChunk) {
+                await chrome.tabs.remove(t.id);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn("[FlowShelf BG] cleanup blank tab failed:", err);
+        }
+      }
+
+      // Step 10: 关闭变空的普通窗口（保留当前窗口和特殊窗口）
       const remainingWindows = await chrome.windows.getAll();
       for (const win of remainingWindows) {
         if (win.id == null) continue;
         if (win.id === currentWindowId) continue;
+        // 不关闭刚创建的窗口（它们有分组内容）
+        if (windowSlots.some((s) => s.windowId === win.id)) continue;
         if (win.type !== "normal") continue;
         const tabsInWin = await chrome.tabs.query({ windowId: win.id });
         if (tabsInWin.length === 0) {

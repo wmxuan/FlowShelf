@@ -83,11 +83,19 @@ export default function Popup() {
       const itemType = type === "card" ? "article" : "tool";
       await learningApi.create(tabUrl, tabTitle, itemType, content);
 
+      // 检查 AI 模式，区分提示文案
+      let isAiMode = false;
+      try {
+        const health = await learningApi.checkHealth();
+        isAiMode = health.ai_mode === "real";
+      } catch { /* ignore */ }
+
       // 成功：向当前页面注入 toast（绿色，与书签/bookmarklet 视觉一致），不显示第二页
-      const msg =
-        type === "card"
-          ? "✅ 已收入知识卡片库暂存区，AI 后台生成中"
-          : "✅ 已放入工具箱暂存区，AI 后台生成中";
+      const msg = isAiMode
+        ? (type === "card"
+            ? "✅ 已收入知识卡片库暂存区，AI 后台生成中"
+            : "✅ 已放入工具箱暂存区，AI 后台生成中")
+        : "✅ 已保存到暂存区";
       await injectToastToCurrentTab(msg, true);
 
       // toast 弹出后短延迟关闭 popup，让用户感知反馈已送达
@@ -480,7 +488,7 @@ export default function Popup() {
           <span className="fs-logo-text">FlowShelf</span>
         </div>
         <div className="fs-header-actions">
-          <button
+          {/* <button
             className="fs-nav-btn"
             onClick={() => openWebPage("/cards")}
             title="打开卡片库"
@@ -500,7 +508,7 @@ export default function Popup() {
             title="打开 Tab 管理台"
           >
             🗂️
-          </button>
+          </button> */}
           <button className="fs-icon-btn" onClick={openSettings} title="设置">
             ⚙️
           </button>

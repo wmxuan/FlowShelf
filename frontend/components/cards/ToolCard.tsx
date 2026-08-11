@@ -4,6 +4,7 @@ import { Wrench, Eye, Clock, Trash2, ExternalLink, RefreshCw, AlertCircle } from
 import type { ToolCardData } from './shared';
 import { extractDomain } from './shared';
 import DeleteConfirmButton from '@/components/DeleteConfirmButton';
+import { useAiMode } from '@/hooks/useAiMode';
 
 export interface ToolCardActions {
   /** 点击整行 → 查看详情（弹窗内才有编辑按钮） */
@@ -39,13 +40,23 @@ interface ToolCardProps {
  */
 export default function ToolCard({ data, actions }: ToolCardProps) {
   const { domain, faviconUrl } = extractDomain(data.url);
+  const { aiMode } = useAiMode();
 
   const showGeneratingHint = data.source === 'learning' && data.is_ready === false;
-  // AI 生成失败：is_ready=true 但 description 为空
-  const showFailedHint =
+  // AI 模式下：is_ready=True 但 description 为空 → 生成失败（红色 + 重试）
+  const showAiFailed =
     data.source === 'learning' &&
     data.is_ready === true &&
-    !data.description;
+    !data.description &&
+    !data.is_converted &&
+    aiMode;
+  // 基础模式下：is_ready=True 但 description 为空 → 待手动填写（蓝色）
+  const showNoAiHint =
+    data.source === 'learning' &&
+    data.is_ready === true &&
+    !data.description &&
+    !data.is_converted &&
+    !aiMode;
   const showConvertedBadge = data.source === 'learning' && data.is_converted;
 
   const handleOpen = (e: React.MouseEvent) => {
@@ -81,7 +92,7 @@ export default function ToolCard({ data, actions }: ToolCardProps) {
         />
       </div>
 
-      {/* 标题 + 域名（点击不跳转，整行已绑定 onView） */}
+      {/* 标题 + 域名 + 描述（点击不跳转，整行已绑定 onView） */}
       <div className="min-w-0 flex-1">
         <span
           className="block truncate text-sm font-medium transition-colors hover:text-primary"
@@ -94,6 +105,11 @@ export default function ToolCard({ data, actions }: ToolCardProps) {
             {domain}
           </span>
         )}
+        {data.description && (
+          <span className="block mt-1 line-clamp-2 text-xs text-muted-foreground/80" title={data.description}>
+            {data.description}
+          </span>
+        )}
       </div>
 
       {/* 状态徽标 */}
@@ -102,9 +118,22 @@ export default function ToolCard({ data, actions }: ToolCardProps) {
         <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
           <span className="animate-pulse">⏳</span>
           生成中
+          {actions.onRegenerate && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                actions.onRegenerate?.(data);
+              }}
+              disabled={actions.isRegenerating}
+              className="ml-1 inline-flex items-center gap-0.5 rounded bg-amber-600 px-1.5 py-0.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-2.5 w-2.5 ${actions.isRegenerating ? 'animate-spin' : ''}`} />
+              重试
+            </button>
+          )}
         </span>
       )}
-      {showFailedHint && (
+      {showAiFailed && (
         <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs text-red-700">
           <AlertCircle className="h-3 w-3" />
           AI 生成失败
@@ -121,6 +150,12 @@ export default function ToolCard({ data, actions }: ToolCardProps) {
               重试
             </button>
           )}
+        </span>
+      )}
+      {showNoAiHint && (
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
+          <Wrench className="h-3 w-3" />
+          待手动填写
         </span>
       )}
       {showConvertedBadge && (
@@ -182,6 +217,7 @@ export default function ToolCard({ data, actions }: ToolCardProps) {
             onConfirm={() => actions.onDelete!(data.id)}
             buttonClassName="rounded p-1.5 transition-colors hover:bg-destructive/10 hover:text-destructive"
             buttonTitle="删除"
+            stopPropagation
             confirmText="确认删除这个工具吗？"
           >
             <Trash2 className="h-4 w-4" />

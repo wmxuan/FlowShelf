@@ -154,6 +154,7 @@ export interface SearchResponse {
   results: SearchResult[];
   total: number;
   query: string;
+  semantic_used?: boolean;
 }
 
 // ============ 智能分流 ============

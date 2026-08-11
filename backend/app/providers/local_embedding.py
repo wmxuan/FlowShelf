@@ -25,11 +25,19 @@ log = get_logger(__name__)
 _QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
 
 
-# 本地模型缓存目录：~/.flowshelf/models/
-# 放在用户数据目录，避免被 PyInstaller 打包；同时用户升级版本时模型可复用
+# 本地模型缓存目录
+# 优先使用 ~/.flowshelf/models/（跨版本复用）；
+# 沙箱环境（如 Trae IDE）无权限时降级到项目内 .model_cache/
 def _get_model_cache_dir() -> Path:
     cache_dir = Path.home() / ".flowshelf" / "models"
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        # 写入测试：确认目录可用
+        (cache_dir / ".write_test").touch(exist_ok=True)
+    except (PermissionError, OSError):
+        # 沙箱或只读文件系统 → 降级到项目内
+        cache_dir = Path(__file__).resolve().parent.parent.parent / ".model_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
@@ -134,10 +142,8 @@ class LocalEmbeddingProvider:
                 self._model_name,
                 cache_dir,
             )
-            # 设置 HuggingFace 缓存目录，避免模型被 PyInstaller 的临时目录打断
-            os.environ.setdefault(
-                "HF_HOME", str(Path.home() / ".flowshelf" / "huggingface")
-            )
+            # 设置 HuggingFace 缓存目录（与 cache_dir 保持一致）
+            os.environ.setdefault("HF_HOME", str(cache_dir))
             os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(cache_dir))
             self._model = SentenceTransformer(
                 self._model_name, cache_folder=str(cache_dir)

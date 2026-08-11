@@ -1,8 +1,9 @@
 'use client';
 
-import { Sparkles, Calendar, ExternalLink, Trash2, RefreshCw, AlertCircle } from 'lucide-react';
+import { Sparkles, Calendar, ExternalLink, Trash2, RefreshCw, FileText, AlertCircle } from 'lucide-react';
 import type { KnowledgeCardData } from './shared';
 import DeleteConfirmButton from '@/components/DeleteConfirmButton';
+import { useAiMode } from '@/hooks/useAiMode';
 
 export interface KnowledgeCardActions {
   /** 点击卡片主体 → 查看详情（弹窗内才有编辑按钮） */
@@ -36,12 +37,22 @@ interface KnowledgeCardProps {
  * 场景专属（通过插槽注入）：转为正式（learning）、生成中提示（learning !is_ready）
  */
 export default function KnowledgeCard({ data, actions }: KnowledgeCardProps) {
+  const { aiMode } = useAiMode();
   const showGeneratingHint = data.source === 'learning' && data.is_ready === false;
-  // AI 生成失败：is_ready=true 但 AI 内容为空（后端 enrich 失败时标记 is_ready=true）
-  const showFailedHint =
+  // AI 模式下：is_ready=True 但 AI 内容为空 → 生成失败（红色 + 重试）
+  const showAiFailed =
     data.source === 'learning' &&
     data.is_ready === true &&
-    !data.ai_summary;
+    !data.ai_summary &&
+    !data.is_converted &&
+    aiMode;
+  // 基础模式下：is_ready=True 但 AI 内容为空 → 待手动填写（蓝色）
+  const showNoAiHint =
+    data.source === 'learning' &&
+    data.is_ready === true &&
+    !data.ai_summary &&
+    !data.is_converted &&
+    !aiMode;
   const showConvertedBadge = data.source === 'learning' && data.is_converted;
 
   return (
@@ -76,15 +87,30 @@ export default function KnowledgeCard({ data, actions }: KnowledgeCardProps) {
       {/* 生成中提示（仅 learning 未就绪） */}
       {showGeneratingHint && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-          <div className="flex items-center gap-2 text-xs text-amber-700">
-            <span className="inline-block animate-pulse">⏳</span>
-            AI 正在生成摘要和标签...
+          <div className="flex items-center justify-between gap-2 text-xs text-amber-700">
+            <div className="flex items-center gap-2">
+              <span className="inline-block animate-pulse">⏳</span>
+              AI 正在生成摘要和标签...
+            </div>
+            {actions.onRegenerate && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  actions.onRegenerate?.(data);
+                }}
+                disabled={actions.isRegenerating}
+                className="inline-flex items-center gap-1 rounded bg-amber-600 px-2 py-0.5 text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3 w-3 ${actions.isRegenerating ? 'animate-spin' : ''}`} />
+                重新生成
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {/* 生成失败提示（learning 已就绪但 AI 内容为空） */}
-      {showFailedHint && (
+      {/* AI 生成失败提示（AI 模式下 is_ready=True 但 AI 内容为空） */}
+      {showAiFailed && (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs text-red-700">
@@ -104,6 +130,16 @@ export default function KnowledgeCard({ data, actions }: KnowledgeCardProps) {
                 重新生成
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 基础模式待手动填写提示 */}
+      {showNoAiHint && (
+        <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+          <div className="flex items-center gap-2 text-xs text-blue-700">
+            <FileText className="h-3.5 w-3.5" />
+            点击「收藏」手动填写摘要和标签
           </div>
         </div>
       )}
